@@ -34,6 +34,8 @@ export async function GET(req: NextRequest) {
         users: users || [],
         count: users?.length || 0,
         _timestamp: Date.now(),
+        _debug_url: process.env.NEXT_PUBLIC_SUPABASE_URL,
+        _debug_has_service_key: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
       },
       {
         headers: {
