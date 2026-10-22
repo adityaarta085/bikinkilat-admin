@@ -37,10 +37,41 @@ import {
   Gift,
   Flame,
   Mail,
-  Info
+  Info,
+  Headphones,
+  MessageSquare,
+  Copy,
+  Phone,
+  CheckCircle2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useAdminAuth, PRIMARY_ADMIN_EMAIL } from '@/lib/admin-auth';
+
+interface SupportTicketMessage {
+  id: string;
+  ticket_id: string;
+  sender_type: 'user' | 'admin' | 'system';
+  sender_name: string;
+  message: string;
+  created_at: string;
+}
+
+interface SupportTicketItem {
+  id: string;
+  ticket_number: string;
+  user_id: string | null;
+  user_name: string;
+  user_email: string | null;
+  user_phone: string | null;
+  category: string;
+  subject: string;
+  status: 'open' | 'in_progress' | 'resolved' | 'closed';
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  created_at: string;
+  updated_at: string;
+  messages?: SupportTicketMessage[];
+  user_tokens?: number | null;
+}
 
 interface UserItem {
   id: string;
@@ -102,7 +133,7 @@ export default function AdminDashboardPage() {
   const { user, session, isAdmin, isLoading: isAuthLoading, signOut } = useAdminAuth();
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'notifications' | 'settings'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'notifications' | 'support' | 'settings'>('analytics');
 
   // Data states
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
@@ -114,6 +145,21 @@ export default function AdminDashboardPage() {
   const [searchUserQuery, setSearchUserQuery] = useState('');
   const [searchTxQuery, setSearchTxQuery] = useState('');
   const [txStatusFilter, setTxStatusFilter] = useState('all');
+
+  // Support Tickets State
+  const [supportTickets, setSupportTickets] = useState<SupportTicketItem[]>([]);
+  const [supportStats, setSupportStats] = useState({ total: 0, open: 0, in_progress: 0, resolved: 0 });
+  const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
+  const [selectedTicketDetail, setSelectedTicketDetail] = useState<SupportTicketItem | null>(null);
+  const [supportSearch, setSupportSearch] = useState('');
+  const [supportFilterStatus, setSupportFilterStatus] = useState<string>('all');
+  const [adminReplyText, setAdminReplyText] = useState('');
+  const [adminReplyStatus, setAdminReplyStatus] = useState<'open' | 'in_progress' | 'resolved'>('in_progress');
+  const [dispatchUserNotification, setDispatchUserNotification] = useState(true);
+  const [replyWithPopup, setReplyWithPopup] = useState(false);
+  const [isSendingReply, setIsSendingReply] = useState(false);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [copiedTicketNo, setCopiedTicketNo] = useState(false);
 
   // Token Adjustment Modal State
   const [selectedUser, setSelectedUser] = useState<UserItem | null>(null);
@@ -202,10 +248,118 @@ export default function AdminDashboardPage() {
       } else {
         console.warn('Notifications fetch error:', await nRes.text());
       }
+
+      // 5. Fetch Support Tickets (bypassing browser & intermediate cache)
+      const stRes = await fetch(`/api/admin/support/tickets?_t=${timestamp}`, { headers, cache: 'no-store' });
+      if (stRes.ok) {
+        const stJson = await stRes.json();
+        if (stJson.success) {
+          setSupportTickets(stJson.tickets || []);
+          if (stJson.stats) setSupportStats(stJson.stats);
+        }
+      } else {
+        console.warn('Support tickets fetch error:', await stRes.text());
+      }
     } catch (e) {
       console.error('Error fetching admin data:', e);
     } finally {
       setIsLoadingData(false);
+    }
+  };
+
+  // Fetch single ticket details and conversation thread
+  const fetchTicketDetail = async (ticketId: string) => {
+    setIsLoadingDetail(true);
+    setSelectedTicketId(ticketId);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+      const res = await fetch(`/api/admin/support/tickets/${ticketId}?_t=${Date.now()}`, { headers, cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.ticket) {
+          setSelectedTicketDetail(data.ticket);
+          if (data.ticket.status === 'open') {
+            setAdminReplyStatus('in_progress');
+          } else if (data.ticket.status === 'resolved' || data.ticket.status === 'closed') {
+            setAdminReplyStatus('resolved');
+          } else {
+            setAdminReplyStatus(data.ticket.status);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error loading ticket detail:', err);
+    } finally {
+      setIsLoadingDetail(false);
+    }
+  };
+
+  // Handle Admin reply submission
+  const handleAdminReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTicketId || !adminReplyText.trim()) return;
+    setIsSendingReply(true);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+      const res = await fetch(`/api/admin/support/tickets/${selectedTicketId}/reply`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          message: adminReplyText.trim(),
+          status: adminReplyStatus,
+          notify_user: dispatchUserNotification,
+          is_popup: replyWithPopup,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAdminReplyText('');
+        await fetchTicketDetail(selectedTicketId);
+        await fetchData();
+        confetti({ particleCount: 35, spread: 60, origin: { y: 0.8 } });
+      } else {
+        alert(data.error || 'Gagal mengirim balasan.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Gagal mengirim balasan.');
+    } finally {
+      setIsSendingReply(false);
+    }
+  };
+
+  // Handle quick status update (without reply message)
+  const handleQuickUpdateStatus = async (ticketId: string, newStatus: string) => {
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+      const res = await fetch(`/api/admin/support/tickets/${ticketId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ status: newStatus }),
+      });
+      if (res.ok) {
+        await fetchTicketDetail(ticketId);
+        await fetchData();
+      }
+    } catch (err) {
+      console.error('Failed to update status:', err);
     }
   };
 
@@ -547,6 +701,29 @@ export default function AdminDashboardPage() {
     });
   }, [transactions, txStatusFilter, searchTxQuery]);
 
+  // Filtered Support Tickets
+  const filteredTickets = useMemo(() => {
+    return supportTickets.filter((t) => {
+      const matchStatus = supportFilterStatus === 'all' || t.status === supportFilterStatus;
+      const matchSearch =
+        !supportSearch ||
+        t.ticket_number?.toLowerCase().includes(supportSearch.toLowerCase()) ||
+        t.subject?.toLowerCase().includes(supportSearch.toLowerCase()) ||
+        t.user_name?.toLowerCase().includes(supportSearch.toLowerCase()) ||
+        (t.user_email && t.user_email.toLowerCase().includes(supportSearch.toLowerCase())) ||
+        t.category?.toLowerCase().includes(supportSearch.toLowerCase());
+      return matchStatus && matchSearch;
+    });
+  }, [supportTickets, supportFilterStatus, supportSearch]);
+
+  // WhatsApp helper
+  const getWhatsAppUrl = (phone: string, ticketNum: string, userName: string) => {
+    const cleanPhone = phone.replace(/[^0-9]/g, '');
+    const formattedPhone = cleanPhone.startsWith('0') ? `62${cleanPhone.slice(1)}` : cleanPhone;
+    const greeting = encodeURIComponent(`Halo ${userName}, kami dari Customer Support BikinKilat menindaklanjuti tiket bantuan #${ticketNum}. Bagaimana kami dapat membantu Anda hari ini?`);
+    return `https://wa.me/${formattedPhone}?text=${greeting}`;
+  };
+
   // Currency Formatter
   const formatRupiah = (val: number | string) => {
     const num = typeof val === 'string' ? parseInt(val, 10) : val;
@@ -756,6 +933,28 @@ export default function AdminDashboardPage() {
             <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
               {notifications.length}
             </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('support')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition shrink-0 ${
+              activeTab === 'support'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Headphones className="w-4 h-4" />
+            <span>Tiket Bantuan &amp; CS</span>
+            {supportStats.open > 0 ? (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse shadow-sm">
+                {supportStats.open} Baru
+              </span>
+            ) : (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+                {supportTickets.length}
+              </span>
+            )}
           </button>
 
           <button
@@ -1526,7 +1725,455 @@ export default function AdminDashboardPage() {
           </div>
         )}
 
-        {/* TAB 5: SYSTEM SETTINGS & ECOSYSTEM */}
+        {/* TAB 5: SUPPORT TICKETS & CUSTOMER SERVICE DESK */}
+        {activeTab === 'support' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {/* Top Stats Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 space-y-2">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="text-xs font-bold">Total Tiket Masuk</span>
+                  <MessageSquare className="w-4 h-4 text-slate-400" />
+                </div>
+                <div className="text-2xl font-black text-white">{supportStats.total}</div>
+                <div className="text-[11px] text-slate-500">Semua laporan &amp; pertanyaan</div>
+              </div>
+
+              <div className="bg-slate-900 border border-amber-900/40 rounded-3xl p-5 space-y-2">
+                <div className="flex items-center justify-between text-amber-400">
+                  <span className="text-xs font-bold">Menunggu CS</span>
+                  <Clock className="w-4 h-4 text-amber-400" />
+                </div>
+                <div className="text-2xl font-black text-amber-400 flex items-center gap-2">
+                  <span>{supportStats.open}</span>
+                  {supportStats.open > 0 && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse">
+                      Prioritas
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] text-amber-300/70">Perlu ditindaklanjuti admin</div>
+              </div>
+
+              <div className="bg-slate-900 border border-blue-900/40 rounded-3xl p-5 space-y-2">
+                <div className="flex items-center justify-between text-blue-400">
+                  <span className="text-xs font-bold">Sedang Ditangani</span>
+                  <Activity className="w-4 h-4 text-blue-400" />
+                </div>
+                <div className="text-2xl font-black text-blue-400">{supportStats.in_progress}</div>
+                <div className="text-[11px] text-blue-300/70">Dalam proses investigasi</div>
+              </div>
+
+              <div className="bg-slate-900 border border-emerald-900/40 rounded-3xl p-5 space-y-2">
+                <div className="flex items-center justify-between text-emerald-400">
+                  <span className="text-xs font-bold">Selesai Solutif</span>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                </div>
+                <div className="text-2xl font-black text-emerald-400">{supportStats.resolved}</div>
+                <div className="text-[11px] text-emerald-300/70">Terselesaikan &amp; ditutup</div>
+              </div>
+            </div>
+
+            {/* Support Desk 2-Column Interface */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              {/* Left Column: Ticket List & Search (5 cols) */}
+              <div className="lg:col-span-5 xl:col-span-4 bg-slate-900 border border-slate-800 rounded-3xl p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-white font-black text-sm">
+                    <Headphones className="w-4 h-4 text-emerald-400" />
+                    <span>Tiket Bantuan Masuk</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={fetchData}
+                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                    title="Muat ulang tiket"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {/* Search Bar */}
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={supportSearch}
+                    onChange={(e) => setSupportSearch(e.target.value)}
+                    placeholder="Cari tiket, nama, email..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
+                  />
+                </div>
+
+                {/* Status Filter Tabs */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] font-bold">
+                  {[
+                    { id: 'all', label: `Semua (${supportStats.total})` },
+                    { id: 'open', label: `Menunggu (${supportStats.open})` },
+                    { id: 'in_progress', label: `Diproses (${supportStats.in_progress})` },
+                    { id: 'resolved', label: `Selesai (${supportStats.resolved})` },
+                  ].map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setSupportFilterStatus(tab.id)}
+                      className={`px-2.5 py-1.5 rounded-lg whitespace-nowrap transition ${
+                        supportFilterStatus === tab.id
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-800'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Ticket Cards List */}
+                <div className="max-h-[620px] overflow-y-auto space-y-2.5 pr-1">
+                  {filteredTickets.length === 0 ? (
+                    <div className="py-12 text-center text-slate-500 space-y-2">
+                      <Headphones className="w-8 h-8 mx-auto opacity-30" />
+                      <p className="text-xs">Tidak ada tiket bantuan yang cocok.</p>
+                    </div>
+                  ) : (
+                    filteredTickets.map((t) => {
+                      const isSelected = selectedTicketId === t.id;
+                      return (
+                        <div
+                          key={t.id}
+                          onClick={() => fetchTicketDetail(t.id)}
+                          className={`p-3.5 rounded-2xl border transition cursor-pointer text-left space-y-2 ${
+                            isSelected
+                              ? 'bg-slate-800/90 border-emerald-500/80 shadow-lg shadow-emerald-950/30'
+                              : 'bg-slate-950/60 border-slate-800/80 hover:bg-slate-800/40 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-mono text-[11px] font-black text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-800/50">
+                              #{t.ticket_number}
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                t.status === 'open'
+                                  ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                                  : t.status === 'in_progress'
+                                  ? 'bg-blue-500/10 text-blue-400 border border-blue-500/30'
+                                  : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                              }`}
+                            >
+                              {t.status === 'open'
+                                ? 'Menunggu CS'
+                                : t.status === 'in_progress'
+                                ? 'Diproses'
+                                : 'Selesai'}
+                            </span>
+                          </div>
+
+                          <div className="space-y-0.5">
+                            <h4 className="text-xs font-black text-white line-clamp-1">
+                              {t.subject}
+                            </h4>
+                            <p className="text-[11px] text-slate-400 truncate">
+                              {t.user_name} {t.user_email ? `• ${t.user_email}` : ''}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-800/60">
+                            <span className="truncate max-w-[150px]">{t.category}</span>
+                            <span>{formatDate(t.created_at)}</span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Ticket Conversation & CS Action Panel (7 cols) */}
+              <div className="lg:col-span-7 xl:col-span-8 bg-slate-900 border border-slate-800 rounded-3xl p-6 space-y-6">
+                {!selectedTicketDetail ? (
+                  <div className="py-24 text-center space-y-4 max-w-md mx-auto">
+                    <div className="w-16 h-16 rounded-3xl bg-slate-800 border border-slate-700 flex items-center justify-center mx-auto text-emerald-400">
+                      <Headphones className="w-8 h-8" />
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="text-base font-black text-white">
+                        Pilih Tiket untuk Mulai Percakapan
+                      </h3>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Pilih tiket di sebelah kiri untuk melihat pesan pengguna, mengecek saldo akun, membuka kontak WhatsApp, dan mengirim tanggapan resmi CS dengan notifikasi otomatis.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-5">
+                    {/* Header Detail Tiket */}
+                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs font-black text-emerald-400 bg-emerald-950 px-2.5 py-1 rounded-lg border border-emerald-800">
+                            #{selectedTicketDetail.ticket_number}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(selectedTicketDetail.ticket_number);
+                              setCopiedTicketNo(true);
+                              setTimeout(() => setCopiedTicketNo(false), 2000);
+                            }}
+                            className="p-1 rounded-md text-slate-400 hover:text-white bg-slate-900 border border-slate-800 text-[10px] flex items-center gap-1 transition"
+                            title="Salin nomor tiket"
+                          >
+                            <Copy className="w-3 h-3" />
+                            <span>{copiedTicketNo ? 'Tersalin!' : 'Salin'}</span>
+                          </button>
+                          <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-900 text-slate-300 border border-slate-800 font-semibold">
+                            {selectedTicketDetail.category}
+                          </span>
+                        </div>
+
+                        {/* Quick Status Buttons */}
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleQuickUpdateStatus(selectedTicketDetail.id, 'in_progress')}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${
+                              selectedTicketDetail.status === 'in_progress'
+                                ? 'bg-blue-600 text-white border-blue-500'
+                                : 'bg-slate-900 text-blue-400 border-blue-900/50 hover:bg-blue-950/50'
+                            }`}
+                          >
+                            Proses
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleQuickUpdateStatus(selectedTicketDetail.id, 'resolved')}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${
+                              selectedTicketDetail.status === 'resolved'
+                                ? 'bg-emerald-600 text-white border-emerald-500'
+                                : 'bg-slate-900 text-emerald-400 border-emerald-900/50 hover:bg-emerald-950/50'
+                            }`}
+                          >
+                            Tandai Selesai
+                          </button>
+                        </div>
+                      </div>
+
+                      <h3 className="text-base font-black text-white">
+                        {selectedTicketDetail.subject}
+                      </h3>
+
+                      {/* Customer Info Strip */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800/80 text-xs">
+                        <div className="space-y-1">
+                          <span className="text-slate-400 text-[11px] block">Pelapor / Pengguna:</span>
+                          <span className="font-bold text-white block">
+                            {selectedTicketDetail.user_name}
+                          </span>
+                          <span className="text-slate-400 text-[11px] block">
+                            Email: {selectedTicketDetail.user_email || 'Tidak dicantumkan'}
+                          </span>
+                          {selectedTicketDetail.user_phone && (
+                            <span className="text-slate-400 text-[11px] block">
+                              WhatsApp / HP: {selectedTicketDetail.user_phone}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-col sm:items-end justify-between gap-2">
+                          {/* User tokens & Quick Adjust Button */}
+                          {selectedTicketDetail.user_tokens !== undefined && selectedTicketDetail.user_tokens !== null ? (
+                            <div className="flex items-center gap-2">
+                              <span className="px-2.5 py-1 rounded-lg bg-amber-950/40 text-amber-300 border border-amber-800/60 font-bold text-xs">
+                                🪙 {selectedTicketDetail.user_tokens} Token
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedUser({
+                                    id: selectedTicketDetail.user_id || '',
+                                    email: selectedTicketDetail.user_email || '',
+                                    name: selectedTicketDetail.user_name || '',
+                                    tokens: selectedTicketDetail.user_tokens || 0,
+                                    created_at: selectedTicketDetail.created_at,
+                                  });
+                                }}
+                                className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold transition"
+                                title="Buka modal atur token untuk pengguna ini"
+                              >
+                                Atur Saldo
+                              </button>
+                            </div>
+                          ) : null}
+
+                          {/* WhatsApp Direct Action Button */}
+                          {selectedTicketDetail.user_phone && (
+                            <a
+                              href={getWhatsAppUrl(
+                                selectedTicketDetail.user_phone,
+                                selectedTicketDetail.ticket_number,
+                                selectedTicketDetail.user_name
+                              )}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition shadow-sm"
+                            >
+                              <Phone className="w-3.5 h-3.5" />
+                              <span>Hubungi via WhatsApp</span>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Chat Messages Thread */}
+                    <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 min-h-[300px] max-h-[460px] overflow-y-auto space-y-3.5">
+                      {selectedTicketDetail.messages?.length === 0 ? (
+                        <div className="py-12 text-center text-slate-500 text-xs">
+                          Belum ada pesan dalam tiket ini.
+                        </div>
+                      ) : (
+                        selectedTicketDetail.messages?.map((msg) => {
+                          const isAdminSender = msg.sender_type === 'admin';
+                          return (
+                            <div
+                              key={msg.id}
+                              className={`flex flex-col ${isAdminSender ? 'items-end' : 'items-start'}`}
+                            >
+                              <div
+                                className={`max-w-[85%] rounded-2xl p-3.5 space-y-1.5 shadow-md ${
+                                  isAdminSender
+                                    ? 'bg-emerald-950/70 border border-emerald-700/60 text-slate-100 rounded-tr-sm'
+                                    : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-sm'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-3 text-[10px]">
+                                  <span
+                                    className={`font-black ${
+                                      isAdminSender ? 'text-emerald-400' : 'text-slate-400'
+                                    }`}
+                                  >
+                                    {isAdminSender ? '🛡️ CS BikinKilat (Admin)' : msg.sender_name}
+                                  </span>
+                                  <span className="text-slate-500">{formatDate(msg.created_at)}</span>
+                                </div>
+                                <p className="text-xs leading-relaxed whitespace-pre-wrap">
+                                  {msg.message}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    {/* Quick Canned Responses */}
+                    <div className="space-y-1.5">
+                      <span className="text-[11px] font-bold text-slate-400">
+                        Template Balasan Cepat (Klik untuk menyisipkan):
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[
+                          'Halo! Kami sedang memproses kendala Anda secepat mungkin.',
+                          'Saldo token Anda telah kami tambahkan ke akun Anda. Mohon cek halaman kasir Anda.',
+                          'Kendala teknis telah berhasil diperbaiki oleh tim sistem. Silakan coba kembali fitur tersebut.',
+                          'Tiket bantuan ini telah kami selesaikan. Hubungi kami jika masih butuh bantuan!',
+                        ].map((canned, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => setAdminReplyText(canned)}
+                            className="px-2.5 py-1 rounded-lg text-[10px] font-semibold bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 transition text-left"
+                          >
+                            {canned.slice(0, 42)}...
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Admin Reply Form */}
+                    <form onSubmit={handleAdminReply} className="space-y-4 pt-1">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-300 block">
+                          Tuliskan Balasan Resmi CS:
+                        </label>
+                        <textarea
+                          rows={3}
+                          value={adminReplyText}
+                          onChange={(e) => setAdminReplyText(e.target.value)}
+                          placeholder="Tulis pesan penyelesaian atau konfirmasi kepada pengguna..."
+                          className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
+                          required
+                        />
+                      </div>
+
+                      {/* Options & Submit */}
+                      <div className="flex flex-wrap items-center justify-between gap-4 p-3.5 rounded-2xl bg-slate-950 border border-slate-800">
+                        <div className="flex flex-wrap items-center gap-4">
+                          {/* Next Status */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-bold text-slate-400">Status Baru:</span>
+                            <select
+                              value={adminReplyStatus}
+                              onChange={(e) => setAdminReplyStatus(e.target.value as any)}
+                              className="bg-slate-900 border border-slate-700 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none"
+                            >
+                              <option value="in_progress">Tetap Diproses (In Progress)</option>
+                              <option value="resolved">Selesai Solutif (Resolved)</option>
+                              <option value="open">Menunggu Tanggapan (Open)</option>
+                            </select>
+                          </div>
+
+                          {/* Checkbox: Dispatch Notification */}
+                          <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={dispatchUserNotification}
+                              onChange={(e) => setDispatchUserNotification(e.target.checked)}
+                              className="rounded border-slate-700 text-emerald-600 focus:ring-emerald-500 bg-slate-900"
+                            />
+                            <span>Kirim notifikasi ke akun user</span>
+                          </label>
+
+                          {/* Checkbox: Popup alert */}
+                          <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={replyWithPopup}
+                              onChange={(e) => setReplyWithPopup(e.target.checked)}
+                              className="rounded border-slate-700 text-amber-500 focus:ring-amber-500 bg-slate-900"
+                            />
+                            <span>Pop-up layar</span>
+                          </label>
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={isSendingReply || !adminReplyText.trim()}
+                          className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black text-xs flex items-center gap-2 transition shadow-md shadow-emerald-600/20"
+                        >
+                          {isSendingReply ? (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              <span>Mengirim...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Send className="w-3.5 h-3.5" />
+                              <span>Kirim Tanggapan Resmi</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 6: SYSTEM SETTINGS & ECOSYSTEM */}
         {activeTab === 'settings' && (
           <div className="space-y-6 animate-in fade-in duration-200 max-w-4xl">
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6">
