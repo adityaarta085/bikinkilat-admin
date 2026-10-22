@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { supabaseAdmin } from './supabase';
-import { isSuperAdmin, PRIMARY_ADMIN_EMAIL } from './admin-auth';
+import { isSuperAdmin, PRIMARY_ADMIN_EMAIL } from './admin-constants';
 
 export interface AdminAuthResult {
   authorized: boolean;
