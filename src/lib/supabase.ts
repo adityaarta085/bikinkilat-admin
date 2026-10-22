@@ -16,7 +16,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
-// Server-side Admin instance with service_role key
+// Server-side Admin instance with service_role key - ALWAYS NO-STORE
 export const supabaseAdmin = createClient(
   supabaseUrl, 
   supabaseServiceRoleKey || supabaseAnonKey,
@@ -24,6 +24,14 @@ export const supabaseAdmin = createClient(
     auth: {
       autoRefreshToken: false,
       persistSession: false,
+    },
+    global: {
+      fetch: (url, options = {}) => {
+        return fetch(url, {
+          ...options,
+          cache: 'no-store',
+        });
+      },
     },
   }
 );

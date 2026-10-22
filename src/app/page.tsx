@@ -165,8 +165,10 @@ export default function AdminDashboardPage() {
         headers['authorization'] = `Bearer ${session.access_token}`;
       }
 
-      // 1. Fetch Analytics
-      const aRes = await fetch('/api/admin/analytics', { headers });
+      const timestamp = Date.now();
+
+      // 1. Fetch Analytics (bypassing browser & intermediate cache)
+      const aRes = await fetch(`/api/admin/analytics?_t=${timestamp}`, { headers, cache: 'no-store' });
       if (aRes.ok) {
         const aJson = await aRes.json();
         if (aJson.success) setAnalytics(aJson.data);
@@ -174,8 +176,8 @@ export default function AdminDashboardPage() {
         console.warn('Analytics fetch error:', await aRes.text());
       }
 
-      // 2. Fetch Users
-      const uRes = await fetch('/api/admin/users', { headers });
+      // 2. Fetch Users (bypassing browser & intermediate cache)
+      const uRes = await fetch(`/api/admin/users?_t=${timestamp}`, { headers, cache: 'no-store' });
       if (uRes.ok) {
         const uJson = await uRes.json();
         if (uJson.success) setUsers(uJson.users);
@@ -183,8 +185,8 @@ export default function AdminDashboardPage() {
         console.warn('Users fetch error:', await uRes.text());
       }
 
-      // 3. Fetch Transactions
-      const tRes = await fetch('/api/admin/transactions', { headers });
+      // 3. Fetch Transactions (bypassing browser & intermediate cache)
+      const tRes = await fetch(`/api/admin/transactions?_t=${timestamp}`, { headers, cache: 'no-store' });
       if (tRes.ok) {
         const tJson = await tRes.json();
         if (tJson.success) setTransactions(tJson.transactions);
@@ -192,8 +194,8 @@ export default function AdminDashboardPage() {
         console.warn('Transactions fetch error:', await tRes.text());
       }
 
-      // 4. Fetch Notifications
-      const nRes = await fetch('/api/admin/notifications', { headers });
+      // 4. Fetch Notifications (bypassing browser & intermediate cache)
+      const nRes = await fetch(`/api/admin/notifications?_t=${timestamp}`, { headers, cache: 'no-store' });
       if (nRes.ok) {
         const nJson = await nRes.json();
         if (nJson.success) setNotifications(nJson.notifications || []);

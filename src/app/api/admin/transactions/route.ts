@@ -3,6 +3,8 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { verifyAdminRequest } from '@/lib/server-admin-auth';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 
 export async function GET(req: NextRequest) {
   try {
@@ -26,21 +28,37 @@ export async function GET(req: NextRequest) {
     }
 
     if (search) {
-      query = query.or(`package_name.ilike.%${search}%,id.ilike.%${search}%,user_id.ilike.%${search}%`);
+      query = query.or(`package_name.ilike.%${search}%,id.ilike.%${search}%`);
     }
 
     const { data: transactions, error } = await query;
     if (error) throw error;
 
-    return NextResponse.json({
-      success: true,
-      transactions: transactions || [],
-      count: transactions?.length || 0,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        transactions: transactions || [],
+        count: transactions?.length || 0,
+        _timestamp: Date.now(),
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+          'Surrogate-Control': 'no-store',
+        },
+      }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { success: false, error: err?.message || 'Gagal memuat transaksi' },
-      { status: 500 }
+      { 
+        status: 500,
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        },
+      }
     );
   }
 }
