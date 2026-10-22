@@ -29,7 +29,15 @@ import {
   ArrowUpRight,
   Filter,
   Download,
-  Radio
+  Radio,
+  Bell,
+  Send,
+  Trash2,
+  ShieldAlert,
+  Gift,
+  Flame,
+  Mail,
+  Info
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useAdminAuth } from '@/lib/admin-auth';
@@ -41,6 +49,21 @@ interface UserItem {
   tokens: number;
   created_at: string;
   updated_at?: string;
+}
+
+interface NotificationAdminItem {
+  id: string;
+  user_id: string | null;
+  title: string;
+  message: string;
+  type: 'info' | 'warning' | 'urgent' | 'success';
+  is_popup: boolean;
+  action_url?: string | null;
+  tokens_granted?: number;
+  created_at: string;
+  created_by: string;
+  read_count: number;
+  target_user?: { email: string; name: string } | null;
 }
 
 interface TransactionItem {
@@ -79,12 +102,13 @@ export default function AdminDashboardPage() {
   const { user, session, isAdmin, isLoading: isAuthLoading, signOut } = useAdminAuth();
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'settings'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'notifications' | 'settings'>('analytics');
 
   // Data states
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [users, setUsers] = useState<UserItem[]>([]);
   const [transactions, setTransactions] = useState<TransactionItem[]>([]);
+  const [notifications, setNotifications] = useState<NotificationAdminItem[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [searchUserQuery, setSearchUserQuery] = useState('');
@@ -101,6 +125,30 @@ export default function AdminDashboardPage() {
 
   // Manual Settle State
   const [settlingTxId, setSettlingTxId] = useState<string | null>(null);
+
+  // Notification Dispatch Form State
+  const [notifTargetType, setNotifTargetType] = useState<'all' | 'user'>('all');
+  const [notifSelectedUserId, setNotifSelectedUserId] = useState<string>('');
+  const [notifTitle, setNotifTitle] = useState('');
+  const [notifMessage, setNotifMessage] = useState('');
+  const [notifType, setNotifType] = useState<'info' | 'warning' | 'urgent' | 'success'>('info');
+  const [notifIsPopup, setNotifIsPopup] = useState(false);
+  const [notifTokensGranted, setNotifTokensGranted] = useState<number>(0);
+  const [notifActionUrl, setNotifActionUrl] = useState('');
+  const [isSubmittingNotif, setIsSubmittingNotif] = useState(false);
+  const [notifFeedback, setNotifFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Bulk Broadcast Modal State
+  const [isBulkSendOpen, setIsBulkSendOpen] = useState(false);
+  const [bulkAmount, setBulkAmount] = useState<number>(5);
+  const [bulkReason, setBulkReason] = useState('Bonus Spesial Pengguna BikinKilat');
+  const [bulkTriggerPopup, setBulkTriggerPopup] = useState(true);
+  const [isSubmittingBulk, setIsSubmittingBulk] = useState(false);
+
+  // Burn / Reset Token State
+  const [burnTargetUser, setBurnTargetUser] = useState<UserItem | null>(null);
+  const [burnReason, setBurnReason] = useState('Penalti Pelanggaran Ketentuan Layanan');
+  const [isSubmittingBurn, setIsSubmittingBurn] = useState(false);
 
   // Load all admin data
   const fetchData = async () => {
@@ -136,6 +184,13 @@ export default function AdminDashboardPage() {
       if (tRes.ok) {
         const tJson = await tRes.json();
         if (tJson.success) setTransactions(tJson.transactions);
+      }
+
+      // 4. Fetch Notifications
+      const nRes = await fetch('/api/admin/notifications', { headers });
+      if (nRes.ok) {
+        const nJson = await nRes.json();
+        if (nJson.success) setNotifications(nJson.notifications || []);
       }
     } catch (e) {
       console.error('Error fetching admin data:', e);
@@ -303,6 +358,160 @@ export default function AdminDashboardPage() {
       alert('Terjadi gangguan jaringan');
     } finally {
       setSettlingTxId(null);
+    }
+  };
+
+  // Handle Send Notification & Warning
+  const handleSendNotification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || isSubmittingNotif) return;
+    setIsSubmittingNotif(true);
+    setNotifFeedback(null);
+
+    try {
+      const res = await fetch('/api/admin/notifications', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-email': user.email || '',
+          ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({
+          title: notifTitle,
+          message: notifMessage,
+          type: notifType,
+          target_type: notifTargetType,
+          user_id: notifTargetType === 'user' ? notifSelectedUserId : null,
+          is_popup: notifIsPopup,
+          tokens_granted: Number(notifTokensGranted) || 0,
+          action_url: notifActionUrl,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Gagal mengirim notifikasi');
+      }
+
+      setNotifFeedback({ type: 'success', message: data.message });
+      try {
+        confetti({ particleCount: 70, spread: 60, origin: { y: 0.5 } });
+      } catch (err) {}
+
+      // Reset form
+      setNotifTitle('');
+      setNotifMessage('');
+      setNotifTokensGranted(0);
+      setNotifActionUrl('');
+      setNotifIsPopup(false);
+
+      fetchData();
+    } catch (err: any) {
+      setNotifFeedback({ type: 'error', message: err.message || 'Terjadi kesalahan sistem' });
+    } finally {
+      setIsSubmittingNotif(false);
+    }
+  };
+
+  // Handle Delete Notification
+  const handleDeleteNotification = async (id: string) => {
+    if (!confirm('Yakin ingin menghapus notifikasi ini dari sistem?')) return;
+
+    try {
+      const res = await fetch(`/api/admin/notifications?id=${id}`, {
+        method: 'DELETE',
+        headers: {
+          'x-admin-email': user?.email || '',
+          ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
+        },
+      });
+      const data = await res.json();
+      if (data.success) {
+        setNotifications((prev) => prev.filter((n) => n.id !== id));
+      } else {
+        alert(data.error || 'Gagal menghapus notifikasi');
+      }
+    } catch (err) {
+      alert('Gagal menghapus notifikasi');
+    }
+  };
+
+  // Handle Bulk Broadcast Tokens to ALL users
+  const handleBulkBroadcastTokens = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || isSubmittingBulk) return;
+    if (!confirm(`Konfirmasi: Bagikan +${bulkAmount} token ke SEMUA (${users.length}) pengguna terdaftar?`)) return;
+
+    setIsSubmittingBulk(true);
+    try {
+      const res = await fetch('/api/admin/tokens/bulk', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-email': user.email || '',
+          ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({
+          action: 'broadcast_add',
+          amount: Number(bulkAmount),
+          reason: bulkReason,
+          triggerPopup: bulkTriggerPopup,
+          popupTitle: `🎉 Bonus Spesial: +${bulkAmount} Token Diterima!`,
+          popupMessage: `Selamat! Super Admin telah membagikan ${bulkAmount} token gratis ke seluruh pengguna: "${bulkReason}". Token Anda sudah aktif dan siap digunakan.`,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Gagal broadcast token');
+
+      try {
+        confetti({ particleCount: 100, spread: 70, origin: { y: 0.5 } });
+      } catch (err) {}
+
+      alert(data.message);
+      setIsBulkSendOpen(false);
+      fetchData();
+    } catch (err: any) {
+      alert(err.message || 'Gagal broadcast token');
+    } finally {
+      setIsSubmittingBulk(false);
+    }
+  };
+
+  // Handle Burn / Reset User Tokens
+  const handleBurnUserTokens = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!burnTargetUser || !user || isSubmittingBurn) return;
+    if (!confirm(`TINDAKAN KERAS: Hanguskan seluruh saldo token (${burnTargetUser.tokens} token) milik ${burnTargetUser.email} dan pasang Pop-up Peringatan Teguran saat ia masuk lagi?`)) return;
+
+    setIsSubmittingBurn(true);
+    try {
+      const res = await fetch('/api/admin/tokens/bulk', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-email': user.email || '',
+          ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({
+          action: 'burn_reset',
+          userId: burnTargetUser.id,
+          reason: burnReason,
+          popupTitle: '⚠️ Peringatan Teguran: Saldo Token Direset',
+          popupMessage: `Akun Anda telah dikenai penalti oleh Super Admin karena alasan: "${burnReason}". Seluruh saldo token Anda (${burnTargetUser.tokens} token) telah direset menjadi 0. Harap gunakan sistem dengan tertib.`,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Gagal reset token');
+
+      alert(data.message);
+      setBurnTargetUser(null);
+      fetchData();
+    } catch (err: any) {
+      alert(err.message || 'Gagal reset token');
+    } finally {
+      setIsSubmittingBurn(false);
     }
   };
 
@@ -525,6 +734,22 @@ export default function AdminDashboardPage() {
 
           <button
             type="button"
+            onClick={() => setActiveTab('notifications')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition shrink-0 ${
+              activeTab === 'notifications'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Bell className="w-4 h-4" />
+            <span>Pusat Notifikasi</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+              {notifications.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('settings')}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition shrink-0 ${
               activeTab === 'settings'
@@ -724,7 +949,18 @@ export default function AdminDashboardPage() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Bulk Broadcast Button */}
+                <button
+                  type="button"
+                  onClick={() => setIsBulkSendOpen(true)}
+                  className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-sm"
+                  title="Bagikan token bonus ke semua pengguna terdaftar"
+                >
+                  <Gift className="w-3.5 h-3.5" />
+                  <span>Broadcast Token (+Semua)</span>
+                </button>
+
                 {/* Export CSV Button */}
                 <button
                   type="button"
@@ -798,20 +1034,50 @@ export default function AdminDashboardPage() {
                             {formatDate(u.created_at)}
                           </td>
                           <td className="py-4 px-6 text-right">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedUser(u);
-                                setAdjustAmount(25);
-                                setAdjustAction('add');
-                                setAdjustReason('Bonus Loyalitas / Penyesuaian');
-                                setActionFeedback(null);
-                              }}
-                              className="px-3.5 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white font-bold text-xs border border-emerald-500/40 transition flex items-center gap-1.5 ml-auto"
-                            >
-                              <Coins className="w-3.5 h-3.5" />
-                              <span>Atur Token</span>
-                            </button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              {/* Send Direct Warning / Notification */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveTab('notifications');
+                                  setNotifTargetType('user');
+                                  setNotifSelectedUserId(u.id);
+                                  setNotifTitle('⚠️ Peringatan Penggunaan Akun');
+                                  setNotifType('warning');
+                                  setNotifIsPopup(true);
+                                }}
+                                className="p-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 transition"
+                                title="Kirim Peringatan Pop-up ke Pengguna Ini"
+                              >
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Burn / Reset Tokens */}
+                              <button
+                                type="button"
+                                onClick={() => setBurnTargetUser(u)}
+                                className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition"
+                                title="Hanguskan Seluruh Saldo Token Pengguna (Penalti)"
+                              >
+                                <Flame className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Adjust Token Balance */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedUser(u);
+                                  setAdjustAmount(25);
+                                  setAdjustAction('add');
+                                  setAdjustReason('Bonus Loyalitas / Penyesuaian');
+                                  setActionFeedback(null);
+                                }}
+                                className="px-3.5 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white font-bold text-xs border border-emerald-500/40 transition flex items-center gap-1.5"
+                              >
+                                <Coins className="w-3.5 h-3.5" />
+                                <span>Atur Token</span>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -952,7 +1218,305 @@ export default function AdminDashboardPage() {
           </div>
         )}
 
-        {/* TAB 4: SYSTEM SETTINGS & ECOSYSTEM */}
+        {/* TAB 4: NOTIFICATION CENTER */}
+        {activeTab === 'notifications' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {/* Form Section: Send & Broadcast Notification */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xl font-black text-white">Kirim Notifikasi &amp; Peringatan Pop-Up</h2>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-indigo-950 text-indigo-400 border border-indigo-800">
+                      Multi-Channel
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Kirim pesan resmi, peringatan teguran keras, atau hadiah token gratis ke pengguna
+                  </p>
+                </div>
+              </div>
+
+              <form onSubmit={handleSendNotification} className="space-y-5">
+                {/* Grid row 1: Target & Type */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Target Type */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-300 block">
+                      Target Penerima:
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setNotifTargetType('all')}
+                        className={`py-2.5 px-3 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-2 border ${
+                          notifTargetType === 'all'
+                            ? 'bg-emerald-600 text-white border-emerald-500 shadow-md'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <span>🌐 Seluruh Pengguna</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNotifTargetType('user')}
+                        className={`py-2.5 px-3 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-2 border ${
+                          notifTargetType === 'user'
+                            ? 'bg-emerald-600 text-white border-emerald-500 shadow-md'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <span>👤 Pengguna Tertentu</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Notification Type */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-300 block">
+                      Tipe Notifikasi:
+                    </label>
+                    <select
+                      value={notifType}
+                      onChange={(e) => setNotifType(e.target.value as any)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-2.5 text-xs text-white outline-none focus:border-emerald-500"
+                    >
+                      <option value="info">ℹ️ Informasi Biasa (Biru)</option>
+                      <option value="warning">⚠️ Peringatan Teguran (Kuning/Oranye)</option>
+                      <option value="urgent">🚨 Tindakan Tegas / Penalti (Merah)</option>
+                      <option value="success">🎁 Hadiah Token / Promo (Hijau)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Specific User Selector if target_type === 'user' */}
+                {notifTargetType === 'user' && (
+                  <div className="space-y-2 animate-in fade-in duration-150">
+                    <label className="text-xs font-bold text-slate-300 block">
+                      Pilih Akun Pengguna:
+                    </label>
+                    <select
+                      value={notifSelectedUserId}
+                      onChange={(e) => setNotifSelectedUserId(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-xs text-white outline-none focus:border-emerald-500 font-mono"
+                      required
+                    >
+                      <option value="">-- Pilih salah satu pengguna ({users.length} akun terdaftar) --</option>
+                      {users.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.email} ({u.name || 'User'}) — Saldo: {u.tokens} Token
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Title */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-300 block">
+                    Judul Notifikasi:
+                  </label>
+                  <input
+                    type="text"
+                    value={notifTitle}
+                    onChange={(e) => setNotifTitle(e.target.value)}
+                    placeholder="Contoh: ⚠️ Peringatan Penggunaan Akun / 🎉 Klaim Bonus 10 Token Anda!"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500"
+                    required
+                  />
+                </div>
+
+                {/* Message */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-300 block">
+                    Isi Pesan Notifikasi:
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={notifMessage}
+                    onChange={(e) => setNotifMessage(e.target.value)}
+                    placeholder="Tuliskan pesan lengkap yang akan dibaca pengguna saat masuk..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500 leading-relaxed"
+                    required
+                  />
+                </div>
+
+                {/* Options Grid: Popup & Token Gift */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+                  {/* Toggle Popup Modal */}
+                  <label className="sm:col-span-1 p-3.5 rounded-2xl bg-slate-950 border border-slate-800 hover:border-slate-700 cursor-pointer flex items-start gap-3 transition">
+                    <input
+                      type="checkbox"
+                      checked={notifIsPopup}
+                      onChange={(e) => setNotifIsPopup(e.target.checked)}
+                      className="mt-1 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 bg-slate-900 border-slate-700"
+                    />
+                    <div className="space-y-0.5">
+                      <span className="text-xs font-bold text-white block">
+                        Wajibkan Pop-Up Modal
+                      </span>
+                      <span className="text-[11px] text-slate-400 block leading-tight">
+                        Muncul memblokir layar saat pengguna masuk kembali
+                      </span>
+                    </div>
+                  </label>
+
+                  {/* Token Gift Amount */}
+                  <div className="sm:col-span-1 space-y-1.5">
+                    <label className="text-xs font-bold text-slate-300 block">
+                      Bonus Token (Opsional):
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={notifTokensGranted}
+                      onChange={(e) => setNotifTokensGranted(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                      placeholder="0"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-2.5 text-xs text-white font-black outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  {/* Action Link */}
+                  <div className="sm:col-span-1 space-y-1.5">
+                    <label className="text-xs font-bold text-slate-300 block">
+                      Tautan Tombol Aksi (Opsional):
+                    </label>
+                    <input
+                      type="url"
+                      value={notifActionUrl}
+                      onChange={(e) => setNotifActionUrl(e.target.value)}
+                      placeholder="https://..."
+                      className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-2.5 text-xs text-white outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Feedback */}
+                {notifFeedback && (
+                  <div
+                    className={`p-3 rounded-xl text-xs font-bold ${
+                      notifFeedback.type === 'success'
+                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                        : 'bg-rose-950 text-rose-400 border border-rose-800'
+                    }`}
+                  >
+                    {notifFeedback.message}
+                  </div>
+                )}
+
+                {/* Submit Button */}
+                <div className="flex items-center justify-end pt-2">
+                  <button
+                    type="submit"
+                    disabled={isSubmittingNotif}
+                    className="px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-extrabold text-xs shadow-lg transition flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isSubmittingNotif ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Mengirimkan...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4" />
+                        <span>Kirimkan Notifikasi &amp; Pasang Peringatan</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* List Section: Notifications History */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                <div>
+                  <h3 className="text-lg font-black text-white">Riwayat Notifikasi &amp; Peringatan Terkirim</h3>
+                  <p className="text-xs text-slate-400">
+                    Daftar seluruh pesan siaran dan peringatan aktif di ekosistem
+                  </p>
+                </div>
+                <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-slate-800 text-slate-300">
+                  Total: {notifications.length}
+                </span>
+              </div>
+
+              {notifications.length === 0 ? (
+                <div className="py-12 text-center text-slate-500 text-xs">
+                  Belum ada notifikasi yang pernah dikirimkan.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-800/60 overflow-x-auto">
+                  {notifications.map((n) => (
+                    <div key={n.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-800/30 px-3 rounded-2xl transition">
+                      <div className="space-y-1.5 flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                              n.type === 'urgent'
+                                ? 'bg-rose-950 text-rose-400 border border-rose-800'
+                                : n.type === 'warning'
+                                ? 'bg-amber-950 text-amber-400 border border-amber-800'
+                                : n.type === 'success'
+                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                : 'bg-blue-950 text-blue-400 border border-blue-800'
+                            }`}
+                          >
+                            {n.type}
+                          </span>
+
+                          {n.is_popup && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-purple-950 text-purple-400 border border-purple-800 flex items-center gap-1">
+                              <AlertTriangle className="w-2.5 h-2.5" />
+                              Modal Pop-up Aktif
+                            </span>
+                          )}
+
+                          <span className="text-xs font-bold text-white">
+                            {n.title}
+                          </span>
+                        </div>
+
+                        <p className="text-xs text-slate-300 leading-relaxed max-w-3xl line-clamp-2">
+                          {n.message}
+                        </p>
+
+                        <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-400">
+                          <span>
+                            Target:{' '}
+                            <strong className="text-slate-200">
+                              {n.user_id ? n.target_user?.email || n.user_id : '🌐 Seluruh Pengguna'}
+                            </strong>
+                          </span>
+                          {n.tokens_granted && n.tokens_granted > 0 ? (
+                            <span className="text-emerald-400 font-bold">
+                              🎁 +{n.tokens_granted} Token
+                            </span>
+                          ) : null}
+                          <span>Dibaca: <strong className="text-emerald-400">{n.read_count} pengguna</strong></span>
+                          <span>Waktu: {formatDate(n.created_at)}</span>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteNotification(n.id)}
+                          className="p-2 rounded-xl bg-slate-800 hover:bg-rose-950 text-slate-400 hover:text-rose-400 border border-slate-700 transition"
+                          title="Hapus notifikasi ini"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 5: SYSTEM SETTINGS & ECOSYSTEM */}
         {activeTab === 'settings' && (
           <div className="space-y-6 animate-in fade-in duration-200 max-w-4xl">
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6">
@@ -1165,6 +1729,209 @@ export default function AdminDashboardPage() {
                     </>
                   ) : (
                     <span>Konfirmasi &amp; Terapkan Saldo</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: BROADCAST TOKEN TO ALL USERS */}
+      {isBulkSendOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl relative">
+            <button
+              type="button"
+              onClick={() => setIsBulkSendOpen(false)}
+              className="absolute top-6 right-6 p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                <Gift className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-white">Broadcast Token ke Semua Pengguna</h3>
+                <p className="text-xs text-slate-400">
+                  Bagikan token gratis secara serentak ke {users.length} akun terdaftar
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleBulkBroadcastTokens} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Jumlah Token per Pengguna:
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={bulkAmount}
+                  onChange={(e) => setBulkAmount(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-lg font-black text-white outline-none focus:border-indigo-500"
+                  required
+                />
+                <div className="flex items-center gap-2 pt-1">
+                  <span className="text-[11px] text-slate-500">Preset:</span>
+                  {[3, 5, 10, 20, 50].map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setBulkAmount(p)}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-bold text-slate-300 transition"
+                    >
+                      +{p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Alasan / Keterangan Audit:
+                </label>
+                <input
+                  type="text"
+                  value={bulkReason}
+                  onChange={(e) => setBulkReason(e.target.value)}
+                  placeholder="Contoh: Promo Spesial Hari Kemerdekaan, Bonus Peluncuran Ekosistem..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
+
+              <label className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 hover:border-slate-700 cursor-pointer flex items-start gap-3 transition">
+                <input
+                  type="checkbox"
+                  checked={bulkTriggerPopup}
+                  onChange={(e) => setBulkTriggerPopup(e.target.checked)}
+                  className="mt-1 w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-900 border-slate-700"
+                />
+                <div className="space-y-0.5">
+                  <span className="text-xs font-bold text-white block">
+                    Kirim Pop-Up Sambutan Saat Pengguna Masuk
+                  </span>
+                  <span className="text-[11px] text-slate-400 block leading-tight">
+                    Pengguna langsung melihat dialog selamat &amp; konfeti bonus token
+                  </span>
+                </div>
+              </label>
+
+              <div className="p-3.5 rounded-2xl bg-indigo-950/40 border border-indigo-900/60 text-xs flex items-center justify-between text-indigo-200">
+                <span>Total Token yang Akan Dikeluarkan:</span>
+                <strong className="text-white text-sm">
+                  {bulkAmount * users.length} Token ({users.length} Pengguna)
+                </strong>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkSendOpen(false)}
+                  className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingBulk}
+                  className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-black text-xs shadow-md transition disabled:opacity-50 flex items-center gap-2"
+                >
+                  {isSubmittingBulk ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Membagikan Token...</span>
+                    </>
+                  ) : (
+                    <span>Siarkan &amp; Bagikan Sekarang</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: BURN / RESET USER TOKENS */}
+      {burnTargetUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-slate-900 border border-rose-900/60 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl relative">
+            <button
+              type="button"
+              onClick={() => setBurnTargetUser(null)}
+              className="absolute top-6 right-6 p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400">
+                <Flame className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-white">Hanguskan / Reset Saldo Token</h3>
+                <p className="text-xs text-rose-400 font-semibold">
+                  Tindakan Penalti &amp; Pemulihan Saldo Ilegal
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-rose-950/30 border border-rose-900/50 space-y-2 text-xs">
+              <div className="flex items-center justify-between text-slate-300">
+                <span>Pengguna Target:</span>
+                <strong className="text-white font-mono">{burnTargetUser.email}</strong>
+              </div>
+              <div className="flex items-center justify-between text-slate-300">
+                <span>Saldo Saat Ini yang Akan Dihanguskan:</span>
+                <strong className="text-rose-400 text-sm font-black">{burnTargetUser.tokens} Token -&gt; 0 Token</strong>
+              </div>
+            </div>
+
+            <form onSubmit={handleBurnUserTokens} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Alasan Penalti (Tercatat Abadi &amp; Ditampilkan ke Pengguna):
+                </label>
+                <input
+                  type="text"
+                  value={burnReason}
+                  onChange={(e) => setBurnReason(e.target.value)}
+                  placeholder="Contoh: Eksploitasi celah pembayaran, Pelanggaran Terms of Service..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-rose-500"
+                  required
+                />
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-[11px] text-slate-400 space-y-1">
+                <span className="font-bold text-slate-200 block">Pemberitahuan Otomatis:</span>
+                <p>
+                  Sistem akan otomatis memasang <strong>Modal Pop-Up Peringatan Teguran</strong> yang wajib dibaca saat pengguna ini membuka web BikinKilat kembali.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setBurnTargetUser(null)}
+                  className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingBurn}
+                  className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-black text-xs shadow-md transition disabled:opacity-50 flex items-center gap-2"
+                >
+                  {isSubmittingBurn ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Memproses...</span>
+                    </>
+                  ) : (
+                    <span>Hanguskan Saldo Sekarang</span>
                   )}
                 </button>
               </div>
