@@ -1,30 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { isSuperAdmin } from '@/lib/admin-auth';
+import { verifyAdminRequest } from '@/lib/server-admin-auth';
 
 export async function POST(
   req: NextRequest,
   { params }: { params: { userId: string } }
 ) {
   try {
-    const adminEmailHeader = req.headers.get('x-admin-email');
-    const authHeader = req.headers.get('authorization');
-
-    let adminEmail = adminEmailHeader || '';
-
-    if (!isSuperAdmin(adminEmail)) {
-      if (authHeader) {
-        const token = authHeader.replace('Bearer ', '');
-        const { data: { user } } = await supabaseAdmin.auth.getUser(token);
-        if (!user || !isSuperAdmin(user.email)) {
-          return NextResponse.json({ error: 'Akses Ditolak: Khusus Super Admin' }, { status: 403 });
-        }
-        adminEmail = user.email || 'Super Admin';
-      } else {
-        return NextResponse.json({ error: 'Akses Ditolak: Otorisasi diperlukan' }, { status: 401 });
-      }
+    const auth = await verifyAdminRequest(req);
+    if (!auth.authorized) {
+      return NextResponse.json({ error: auth.error || 'Akses Ditolak' }, { status: auth.status });
     }
 
+    const adminEmail = auth.email || 'Super Admin';
     const userId = params.userId;
     const body = await req.json();
 

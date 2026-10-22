@@ -27,7 +27,9 @@ import {
   Sparkles, 
   Database,
   ArrowUpRight,
-  Filter
+  Filter,
+  Download,
+  Radio
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useAdminAuth } from '@/lib/admin-auth';
@@ -74,7 +76,7 @@ interface AnalyticsData {
 }
 
 export default function AdminDashboardPage() {
-  const { user, isAdmin, isLoading: isAuthLoading, signOut } = useAdminAuth();
+  const { user, session, isAdmin, isLoading: isAuthLoading, signOut } = useAdminAuth();
 
   // Active Tab
   const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'settings'>('analytics');
@@ -84,6 +86,7 @@ export default function AdminDashboardPage() {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [transactions, setTransactions] = useState<TransactionItem[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(true);
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const [searchUserQuery, setSearchUserQuery] = useState('');
   const [searchTxQuery, setSearchTxQuery] = useState('');
   const [txStatusFilter, setTxStatusFilter] = useState('all');
@@ -106,9 +109,13 @@ export default function AdminDashboardPage() {
     setActionFeedback(null);
 
     try {
-      const headers = {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
         'x-admin-email': user.email || '',
       };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
 
       // 1. Fetch Analytics
       const aRes = await fetch('/api/admin/analytics', { headers });
@@ -141,7 +148,64 @@ export default function AdminDashboardPage() {
     if (!isAuthLoading && user && isAdmin) {
       fetchData();
     }
-  }, [user, isAdmin, isAuthLoading]);
+  }, [user, isAdmin, isAuthLoading, session]);
+
+  // Live Auto Refresh (30s)
+  useEffect(() => {
+    if (!autoRefresh || !user || !isAdmin) return;
+    const interval = setInterval(() => {
+      fetchData();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, user, isAdmin, session]);
+
+  // CSV Export for Users
+  const exportUsersCSV = () => {
+    if (!users.length) return;
+    const header = ['ID', 'Email', 'Nama', 'Saldo Token', 'Tanggal Registrasi'];
+    const rows = users.map((u) => [
+      `"${u.id}"`,
+      `"${u.email}"`,
+      `"${(u.name || '').replace(/"/g, '""')}"`,
+      u.tokens,
+      `"${u.created_at}"`,
+    ]);
+    const csvContent =
+      'data:text/csv;charset=utf-8,' +
+      [header.join(','), ...rows.map((e) => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `bikinkilat-users-${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // CSV Export for Transactions
+  const exportTransactionsCSV = () => {
+    if (!transactions.length) return;
+    const header = ['ID Transaksi', 'User ID', 'Paket', 'Nominal (IDR)', 'Token Ditambah', 'Status', 'Waktu'];
+    const rows = transactions.map((t) => [
+      `"${t.id}"`,
+      `"${t.user_id}"`,
+      `"${(t.package_name || '').replace(/"/g, '""')}"`,
+      t.amount_idr,
+      t.tokens_added,
+      `"${t.status}"`,
+      `"${t.created_at}"`,
+    ]);
+    const csvContent =
+      'data:text/csv;charset=utf-8,' +
+      [header.join(','), ...rows.map((e) => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `bikinkilat-transactions-${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Handle Token Modification Submit
   const handleModifyTokens = async (e: React.FormEvent) => {
@@ -157,6 +221,7 @@ export default function AdminDashboardPage() {
         headers: {
           'Content-Type': 'application/json',
           'x-admin-email': user.email || '',
+          ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({
           action: adjustAction,
@@ -222,6 +287,7 @@ export default function AdminDashboardPage() {
         headers: {
           'Content-Type': 'application/json',
           'x-admin-email': user.email || '',
+          ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({ transactionId }),
       });
@@ -352,6 +418,21 @@ export default function AdminDashboardPage() {
 
         {/* Header Right Actions */}
         <div className="flex items-center gap-3">
+          {/* Auto Refresh Toggle */}
+          <button
+            type="button"
+            onClick={() => setAutoRefresh(!autoRefresh)}
+            className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
+              autoRefresh
+                ? 'bg-emerald-950/80 text-emerald-400 border-emerald-700/80'
+                : 'bg-slate-800 text-slate-400 hover:text-white border-slate-700'
+            }`}
+            title="Otomatis memperbarui data setiap 30 detik"
+          >
+            <Radio className={`w-3.5 h-3.5 ${autoRefresh ? 'animate-pulse text-emerald-400' : ''}`} />
+            <span>Auto (30s)</span>
+          </button>
+
           <button
             type="button"
             onClick={fetchData}
@@ -643,16 +724,30 @@ export default function AdminDashboardPage() {
                 </p>
               </div>
 
-              {/* Search Bar */}
-              <div className="relative min-w-[280px]">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={searchUserQuery}
-                  onChange={(e) => setSearchUserQuery(e.target.value)}
-                  placeholder="Cari nama, email, atau ID..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500 transition"
-                />
+              <div className="flex items-center gap-3">
+                {/* Export CSV Button */}
+                <button
+                  type="button"
+                  onClick={exportUsersCSV}
+                  disabled={users.length === 0}
+                  className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-bold transition border border-slate-700 disabled:opacity-50"
+                  title="Unduh seluruh data pengguna ke format CSV"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export CSV</span>
+                </button>
+
+                {/* Search Bar */}
+                <div className="relative min-w-[240px]">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchUserQuery}
+                    onChange={(e) => setSearchUserQuery(e.target.value)}
+                    placeholder="Cari nama, email, atau ID..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500 transition"
+                  />
+                </div>
               </div>
             </div>
 
@@ -741,6 +836,18 @@ export default function AdminDashboardPage() {
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
+                {/* Export CSV Button */}
+                <button
+                  type="button"
+                  onClick={exportTransactionsCSV}
+                  disabled={transactions.length === 0}
+                  className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-bold transition border border-slate-700 disabled:opacity-50"
+                  title="Unduh seluruh catatan transaksi ke format CSV"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export CSV</span>
+                </button>
+
                 {/* Status Filter */}
                 <select
                   value={txStatusFilter}

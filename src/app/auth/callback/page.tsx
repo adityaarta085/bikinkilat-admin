@@ -10,26 +10,43 @@ export default function AdminAuthCallbackPage() {
   const router = useRouter();
 
   useEffect(() => {
-    async function handleCallback() {
-      try {
-        const { data: { session }, error } = await supabase.auth.getSession();
-        if (error || !session) {
-          router.push('/auth?error=auth_failed');
-          return;
-        }
+    let resolved = false;
 
-        const email = session.user?.email;
-        if (isSuperAdmin(email)) {
-          router.push('/');
-        } else {
-          router.push('/auth?error=unauthorized');
-        }
-      } catch (e) {
-        router.push('/auth?error=unexpected');
+    const handleValidSession = (sessionUserEmail?: string | null) => {
+      if (resolved) return;
+      resolved = true;
+      if (isSuperAdmin(sessionUserEmail)) {
+        router.push('/');
+      } else {
+        router.push('/auth?error=unauthorized');
       }
-    }
+    };
 
-    handleCallback();
+    // 1. Direct session check
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (session?.user?.email) {
+        handleValidSession(session.user.email);
+      }
+    }).catch(() => {});
+
+    // 2. Listen to SIGNED_IN event from OAuth hash parser
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.user?.email) {
+        handleValidSession(session.user.email);
+      }
+    });
+
+    // 3. Safety timeout
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        router.push('/auth?error=auth_timeout');
+      }
+    }, 6000);
+
+    return () => {
+      clearTimeout(timeout);
+      authListener.subscription.unsubscribe();
+    };
   }, [router]);
 
   return (

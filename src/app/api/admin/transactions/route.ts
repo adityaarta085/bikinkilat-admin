@@ -1,24 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { isSuperAdmin } from '@/lib/admin-auth';
+import { verifyAdminRequest } from '@/lib/server-admin-auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const adminEmailHeader = req.headers.get('x-admin-email');
-    const authHeader = req.headers.get('authorization');
-
-    if (!isSuperAdmin(adminEmailHeader)) {
-      if (authHeader) {
-        const token = authHeader.replace('Bearer ', '');
-        const { data: { user } } = await supabaseAdmin.auth.getUser(token);
-        if (!user || !isSuperAdmin(user.email)) {
-          return NextResponse.json({ error: 'Akses Ditolak: Khusus Super Admin' }, { status: 403 });
-        }
-      } else {
-        return NextResponse.json({ error: 'Akses Ditolak: Otorisasi diperlukan' }, { status: 401 });
-      }
+    const auth = await verifyAdminRequest(req);
+    if (!auth.authorized) {
+      return NextResponse.json({ error: auth.error || 'Akses Ditolak' }, { status: auth.status });
     }
 
     const { searchParams } = new URL(req.url);
@@ -58,24 +48,12 @@ export async function GET(req: NextRequest) {
 // POST: Manual Settlement for delayed QRIS payment
 export async function POST(req: NextRequest) {
   try {
-    const adminEmailHeader = req.headers.get('x-admin-email');
-    const authHeader = req.headers.get('authorization');
-
-    let adminEmail = adminEmailHeader || '';
-
-    if (!isSuperAdmin(adminEmail)) {
-      if (authHeader) {
-        const token = authHeader.replace('Bearer ', '');
-        const { data: { user } } = await supabaseAdmin.auth.getUser(token);
-        if (!user || !isSuperAdmin(user.email)) {
-          return NextResponse.json({ error: 'Akses Ditolak' }, { status: 403 });
-        }
-        adminEmail = user.email || 'Admin';
-      } else {
-        return NextResponse.json({ error: 'Akses Ditolak' }, { status: 401 });
-      }
+    const auth = await verifyAdminRequest(req);
+    if (!auth.authorized) {
+      return NextResponse.json({ error: auth.error || 'Akses Ditolak' }, { status: auth.status });
     }
 
+    const adminEmail = auth.email || 'Super Admin';
     const body = await req.json();
     const { transactionId } = body;
 
