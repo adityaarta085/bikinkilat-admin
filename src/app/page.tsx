@@ -40,7 +40,7 @@ import {
   Info
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { useAdminAuth } from '@/lib/admin-auth';
+import { useAdminAuth, PRIMARY_ADMIN_EMAIL } from '@/lib/admin-auth';
 
 interface UserItem {
   id: string;
@@ -159,7 +159,7 @@ export default function AdminDashboardPage() {
     try {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
-        'x-admin-email': user.email || '',
+        'x-admin-email': user.email || PRIMARY_ADMIN_EMAIL,
       };
       if (session?.access_token) {
         headers['authorization'] = `Bearer ${session.access_token}`;
@@ -170,6 +170,8 @@ export default function AdminDashboardPage() {
       if (aRes.ok) {
         const aJson = await aRes.json();
         if (aJson.success) setAnalytics(aJson.data);
+      } else {
+        console.warn('Analytics fetch error:', await aRes.text());
       }
 
       // 2. Fetch Users
@@ -177,6 +179,8 @@ export default function AdminDashboardPage() {
       if (uRes.ok) {
         const uJson = await uRes.json();
         if (uJson.success) setUsers(uJson.users);
+      } else {
+        console.warn('Users fetch error:', await uRes.text());
       }
 
       // 3. Fetch Transactions
@@ -184,6 +188,8 @@ export default function AdminDashboardPage() {
       if (tRes.ok) {
         const tJson = await tRes.json();
         if (tJson.success) setTransactions(tJson.transactions);
+      } else {
+        console.warn('Transactions fetch error:', await tRes.text());
       }
 
       // 4. Fetch Notifications
@@ -191,6 +197,8 @@ export default function AdminDashboardPage() {
       if (nRes.ok) {
         const nJson = await nRes.json();
         if (nJson.success) setNotifications(nJson.notifications || []);
+      } else {
+        console.warn('Notifications fetch error:', await nRes.text());
       }
     } catch (e) {
       console.error('Error fetching admin data:', e);
@@ -275,7 +283,7 @@ export default function AdminDashboardPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-email': user.email || '',
+          'x-admin-email': user.email || PRIMARY_ADMIN_EMAIL,
           ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({
@@ -341,7 +349,7 @@ export default function AdminDashboardPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-email': user.email || '',
+          'x-admin-email': user.email || PRIMARY_ADMIN_EMAIL,
           ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({ transactionId }),
@@ -373,7 +381,7 @@ export default function AdminDashboardPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-email': user.email || '',
+          'x-admin-email': user.email || PRIMARY_ADMIN_EMAIL,
           ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({
@@ -421,7 +429,7 @@ export default function AdminDashboardPage() {
       const res = await fetch(`/api/admin/notifications?id=${id}`, {
         method: 'DELETE',
         headers: {
-          'x-admin-email': user?.email || '',
+          'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
           ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
         },
       });
@@ -448,7 +456,7 @@ export default function AdminDashboardPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-email': user.email || '',
+          'x-admin-email': user.email || PRIMARY_ADMIN_EMAIL,
           ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({
@@ -490,7 +498,7 @@ export default function AdminDashboardPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-email': user.email || '',
+          'x-admin-email': user.email || PRIMARY_ADMIN_EMAIL,
           ...(session?.access_token ? { authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({
