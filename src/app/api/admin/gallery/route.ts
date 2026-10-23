@@ -18,8 +18,8 @@ const INITIAL_GALLERY = [
   },
   {
     id: 'gal-2',
-    title: 'Aktivitas Akademik SMK Muhammadiyah Bandongan',
-    description: 'Dokumentasi pembelajaran kejuruan Teknik Jaringan Komputer & Telekomunikasi (TJKT) di lingkungan SMK Muhammadiyah Bandongan.',
+    title: 'Aditya Arta Putra - Almamater SMK Muhammadiyah Bandongan',
+    description: 'Dokumentasi resmi siswa 11 TJKT A berseragam almamater kebanggaan SMK Muhammadiyah Bandongan.',
     category: 'Sekolah',
     imageUrl: '/developer/about-sec-image.jpeg',
     date: '2026',
