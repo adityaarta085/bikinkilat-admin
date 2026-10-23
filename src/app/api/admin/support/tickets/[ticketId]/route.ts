@@ -110,3 +110,47 @@ export async function PATCH(
     );
   }
 }
+
+// DELETE: Permanently delete a ticket and all its conversation history
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { ticketId: string } }
+) {
+  try {
+    const auth = await verifyAdminRequest(req);
+    if (!auth.authorized) {
+      return NextResponse.json({ error: auth.error || 'Akses Ditolak' }, { status: auth.status });
+    }
+
+    const { ticketId } = params;
+
+    // 1. Delete all child messages first (satisfy foreign key constraints)
+    const { error: msgErr } = await supabaseAdmin
+      .from('support_ticket_messages')
+      .delete()
+      .eq('ticket_id', ticketId);
+
+    if (msgErr) {
+      console.warn('Notice deleting messages:', msgErr.message);
+    }
+
+    // 2. Delete the ticket itself permanently
+    const { error: ticketErr } = await supabaseAdmin
+      .from('support_tickets')
+      .delete()
+      .eq('id', ticketId);
+
+    if (ticketErr) throw ticketErr;
+
+    return NextResponse.json({
+      success: true,
+      message: 'Tiket dan seluruh riwayat pesan berhasil dihapus permanen.',
+    });
+  } catch (err: any) {
+    console.error('Error deleting ticket:', err);
+    return NextResponse.json(
+      { error: err?.message || 'Gagal menghapus tiket bantuan.' },
+      { status: 500 }
+    );
+  }
+}

@@ -123,7 +123,10 @@ export async function POST(
             }),
           });
           if (resendRes.ok) {
-            emailResult = { sent: true, note: 'Email balasan terkirim via Resend.' };
+            emailResult = { sent: true, note: 'Email balasan berhasil terkirim via Resend.' };
+          } else {
+            const errResend = await resendRes.text();
+            emailResult = { sent: false, note: `Resend gagal: ${errResend}` };
           }
         } else if (brevoKey) {
           const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
@@ -141,26 +144,42 @@ export async function POST(
             }),
           });
           if (brevoRes.ok) {
-            emailResult = { sent: true, note: 'Email balasan terkirim via Brevo.' };
+            emailResult = { sent: true, note: 'Email balasan berhasil terkirim via Brevo.' };
+          } else {
+            const errBrevo = await brevoRes.text();
+            emailResult = { sent: false, note: `Brevo gagal: ${errBrevo}` };
           }
         } else {
           // Attempt edge gateway dispatcher
-          const edgeRes = await fetch(`${gatewayUrl}/api/support/reply-email`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              to: ticket.user_email,
-              name: ticket.user_name,
-              subject: emailSubject,
-              message: message.trim(),
-              ticket_number: ticket.ticket_number,
-            }),
-          });
-          if (edgeRes.ok) {
-            const edgeData = await edgeRes.json();
-            emailResult = { sent: !!edgeData.success, note: edgeData.provider ? `Terkirim via Edge (${edgeData.provider})` : 'Terkirim via Edge.' };
-          } else {
-            emailResult = { sent: false, note: 'API key pengirim email belum aktif, pesan tersimpan aman di tiket panel admin.' };
+          try {
+            const edgeRes = await fetch(`${gatewayUrl}/api/support/reply-email`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                to: ticket.user_email,
+                name: ticket.user_name,
+                subject: emailSubject,
+                message: message.trim(),
+                ticket_number: ticket.ticket_number,
+              }),
+            });
+            if (edgeRes.ok) {
+              const edgeData = await edgeRes.json();
+              emailResult = {
+                sent: !!edgeData.success,
+                note: edgeData.provider ? `Terkirim via Edge (${edgeData.provider})` : 'Terkirim via Edge.',
+              };
+            } else {
+              emailResult = {
+                sent: false,
+                note: 'API key pengirim email belum aktif di server. Gunakan tombol "Balas via Gmail" untuk mengirimkan email langsung ke pengguna.',
+              };
+            }
+          } catch {
+            emailResult = {
+              sent: false,
+              note: 'Kunci API pengirim email (RESEND_API_KEY / BREVO_API_KEY) belum disetel. Gunakan tombol "Balas via Gmail" untuk mengirimkan email langsung ke pengguna.',
+            };
           }
         }
       } catch (e: any) {

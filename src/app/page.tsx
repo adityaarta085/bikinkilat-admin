@@ -168,6 +168,8 @@ export default function AdminDashboardPage() {
   const [editTicketPriority, setEditTicketPriority] = useState('');
   const [editTicketSubject, setEditTicketSubject] = useState('');
   const [isSavingTicketEdit, setIsSavingTicketEdit] = useState(false);
+  const [supportSourceFilter, setSupportSourceFilter] = useState<'all' | 'email' | 'web'>('all');
+  const [isDeletingTicket, setIsDeletingTicket] = useState(false);
 
   // Token Adjustment Modal State
   const [selectedUser, setSelectedUser] = useState<UserItem | null>(null);
@@ -376,10 +378,28 @@ export default function AdminDashboardPage() {
       });
       const data = await res.json();
       if (res.ok && data.success) {
+        const replyMsg = adminReplyText.trim();
         setAdminReplyText('');
         await fetchTicketDetail(selectedTicketId);
         await fetchData();
         confetti({ particleCount: 35, spread: 60, origin: { y: 0.8 } });
+
+        // If email dispatch had a note or wasn't sent, notify admin & prompt Gmail compose
+        if (sendReplyEmail && selectedTicketDetail?.user_email && !data.email_sent) {
+          const openGmail = window.confirm(
+            `Balasan resmi tersimpan di tiket!\n\nCatatan Email: ${data.email_note || 'Kunci API pengirim email belum aktif'}.\n\nApakah Anda ingin membuka Gmail sekarang untuk mengirimkan balasan ini langsung ke ${selectedTicketDetail.user_email}?`
+          );
+          if (openGmail) {
+            const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
+              selectedTicketDetail.user_email
+            )}&su=${encodeURIComponent(
+              `Re: [${selectedTicketDetail.ticket_number}] ${selectedTicketDetail.subject}`
+            )}&body=${encodeURIComponent(
+              `Halo ${selectedTicketDetail.user_name || 'Pelanggan BikinKilat'},\n\n${replyMsg}\n\n---\nTim Customer Support BikinKilat\nWebsite: https://bikinkilat.web.id\nNomor Tiket: #${selectedTicketDetail.ticket_number}\nEmail Bantuan: support@bikinkilat.web.id`
+            )}`;
+            window.open(gmailUrl, '_blank');
+          }
+        }
       } else {
         alert(data.error || 'Gagal mengirim balasan.');
       }
@@ -387,6 +407,46 @@ export default function AdminDashboardPage() {
       alert(err.message || 'Gagal mengirim balasan.');
     } finally {
       setIsSendingReply(false);
+    }
+  };
+
+  // Handle permanently deleting a ticket and all its messages
+  const handleDeleteTicket = async (ticketId: string, ticketNumber: string) => {
+    const isConfirmed = window.confirm(
+      `HAPUS TIKET SECARA PERMANEN?\n\nNomor Tiket: #${ticketNumber}\n\nPeringatan: Seluruh data percakapan tiket ini akan DIHAPUS BERSIH secara permanen dari basis data dan tidak dapat dipulihkan kembali.`
+    );
+    if (!isConfirmed) return;
+
+    setIsDeletingTicket(true);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch(`/api/admin/support/tickets/${ticketId}`, {
+        method: 'DELETE',
+        headers,
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        if (selectedTicketId === ticketId) {
+          setSelectedTicketId(null);
+          setSelectedTicketDetail(null);
+        }
+        await fetchData();
+        alert(`Tiket #${ticketNumber} berhasil dihapus permanen dari sistem.`);
+      } else {
+        alert(data.error || 'Gagal menghapus tiket.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Terjadi kesalahan saat menghapus tiket.');
+    } finally {
+      setIsDeletingTicket(false);
     }
   };
 
@@ -752,10 +812,29 @@ export default function AdminDashboardPage() {
     });
   }, [transactions, txStatusFilter, searchTxQuery]);
 
-  // Filtered Support Tickets
+  // Filtered Support Tickets (Split between Email Masuk & Tiket Web)
+  const emailTicketsCount = useMemo(() => {
+    return supportTickets.filter(
+      (t) => t.category === 'Email Masuk' || t.category === 'Email Bantuan' || (!t.user_id && t.user_email)
+    ).length;
+  }, [supportTickets]);
+
+  const webTicketsCount = useMemo(() => {
+    return Math.max(0, supportTickets.length - emailTicketsCount);
+  }, [supportTickets, emailTicketsCount]);
+
   const filteredTickets = useMemo(() => {
     return supportTickets.filter((t) => {
+      // 1. Source filter (Email vs Web)
+      const isEmailTicket =
+        t.category === 'Email Masuk' || t.category === 'Email Bantuan' || (!t.user_id && t.user_email);
+      if (supportSourceFilter === 'email' && !isEmailTicket) return false;
+      if (supportSourceFilter === 'web' && isEmailTicket) return false;
+
+      // 2. Status filter
       const matchStatus = supportFilterStatus === 'all' || t.status === supportFilterStatus;
+
+      // 3. Search query
       const matchSearch =
         !supportSearch ||
         t.ticket_number?.toLowerCase().includes(supportSearch.toLowerCase()) ||
@@ -765,7 +844,7 @@ export default function AdminDashboardPage() {
         t.category?.toLowerCase().includes(supportSearch.toLowerCase());
       return matchStatus && matchSearch;
     });
-  }, [supportTickets, supportFilterStatus, supportSearch]);
+  }, [supportTickets, supportSourceFilter, supportFilterStatus, supportSearch]);
 
   // WhatsApp helper
   const getWhatsAppUrl = (phone: string, ticketNum: string, userName: string) => {
@@ -1856,6 +1935,45 @@ export default function AdminDashboardPage() {
                   />
                 </div>
 
+                {/* Source Filter: Email Masuk vs Web Portal */}
+                <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setSupportSourceFilter('all')}
+                    className={`py-1.5 px-2 rounded-lg transition text-center ${
+                      supportSourceFilter === 'all'
+                        ? 'bg-slate-800 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Semua ({supportTickets.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSupportSourceFilter('email')}
+                    className={`py-1.5 px-2 rounded-lg transition text-center flex items-center justify-center gap-1 ${
+                      supportSourceFilter === 'email'
+                        ? 'bg-cyan-600 text-white shadow-sm'
+                        : 'text-cyan-400 hover:text-white'
+                    }`}
+                  >
+                    <Mail className="w-3 h-3" />
+                    <span>Email ({emailTicketsCount})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSupportSourceFilter('web')}
+                    className={`py-1.5 px-2 rounded-lg transition text-center flex items-center justify-center gap-1 ${
+                      supportSourceFilter === 'web'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-indigo-400 hover:text-white'
+                    }`}
+                  >
+                    <Globe className="w-3 h-3" />
+                    <span>Web ({webTicketsCount})</span>
+                  </button>
+                </div>
+
                 {/* Status Filter Tabs */}
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] font-bold">
                   {[
@@ -1997,7 +2115,28 @@ export default function AdminDashboardPage() {
                         </div>
 
                         {/* Quick Actions & Edit Button */}
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {/* Quick Gmail Compose Button */}
+                          {selectedTicketDetail.user_email && (
+                            <a
+                              href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
+                                selectedTicketDetail.user_email
+                              )}&su=${encodeURIComponent(
+                                `Re: [${selectedTicketDetail.ticket_number}] ${selectedTicketDetail.subject}`
+                              )}&body=${encodeURIComponent(
+                                `Halo ${selectedTicketDetail.user_name || 'Pelanggan BikinKilat'},\n\nTerima kasih telah menghubungi Customer Support BikinKilat.\n\n---\nTim Customer Support BikinKilat\nWebsite: https://bikinkilat.web.id\nNomor Tiket: #${selectedTicketDetail.ticket_number}\nEmail Bantuan: support@bikinkilat.web.id`
+                              )}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-2.5 py-1 rounded-lg text-[11px] font-bold border transition bg-rose-950/40 text-rose-300 border-rose-800/60 hover:bg-rose-900/60 flex items-center gap-1 shadow-sm"
+                              title="Buka compose Gmail untuk membalas email pengguna secara langsung"
+                            >
+                              <Mail className="w-3 h-3 text-rose-400" />
+                              <span>Balas di Gmail</span>
+                              <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+                            </a>
+                          )}
+
                           <button
                             type="button"
                             onClick={() => setIsEditingTicket(!isEditingTicket)}
@@ -2028,6 +2167,18 @@ export default function AdminDashboardPage() {
                             }`}
                           >
                             Tandai Selesai
+                          </button>
+
+                          {/* Permanently Delete Ticket Button */}
+                          <button
+                            type="button"
+                            disabled={isDeletingTicket}
+                            onClick={() => handleDeleteTicket(selectedTicketDetail.id, selectedTicketDetail.ticket_number)}
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-bold border transition bg-red-950/60 text-red-400 border-red-800/60 hover:bg-red-900 hover:text-white flex items-center gap-1 disabled:opacity-50"
+                            title="Hapus tiket dan seluruh percakapan secara permanen dari database"
+                          >
+                            <Trash2 className="w-3 h-3 text-red-400" />
+                            <span>{isDeletingTicket ? 'Menghapus...' : 'Hapus Tiket'}</span>
                           </button>
                         </div>
                       </div>
@@ -2118,9 +2269,27 @@ export default function AdminDashboardPage() {
                           <span className="font-bold text-white block">
                             {selectedTicketDetail.user_name}
                           </span>
-                          <span className="text-slate-400 text-[11px] block">
-                            Email: {selectedTicketDetail.user_email || 'Tidak dicantumkan'}
-                          </span>
+                          <div className="flex items-center gap-1 text-slate-400 text-[11px]">
+                            <span>Email:</span>
+                            {selectedTicketDetail.user_email ? (
+                              <a
+                                href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
+                                  selectedTicketDetail.user_email
+                                )}&su=${encodeURIComponent(
+                                  `Re: [${selectedTicketDetail.ticket_number}] ${selectedTicketDetail.subject}`
+                                )}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-rose-400 hover:text-rose-300 hover:underline font-mono flex items-center gap-1 font-bold"
+                                title="Klik untuk membuka compose Gmail"
+                              >
+                                <span>{selectedTicketDetail.user_email}</span>
+                                <ExternalLink className="w-2.5 h-2.5 opacity-70" />
+                              </a>
+                            ) : (
+                              <span>Tidak dicantumkan</span>
+                            )}
+                          </div>
                           {selectedTicketDetail.user_phone && (
                             <span className="text-slate-400 text-[11px] block">
                               WhatsApp / HP: {selectedTicketDetail.user_phone}
