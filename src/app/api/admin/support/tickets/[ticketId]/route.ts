@@ -65,7 +65,7 @@ export async function GET(
   }
 }
 
-// PATCH: Update ticket status or priority
+// PATCH: Update ticket status, priority, category, or metadata
 export async function PATCH(
   req: NextRequest,
   { params }: { params: { ticketId: string } }
@@ -78,13 +78,17 @@ export async function PATCH(
 
     const { ticketId } = params;
     const body = await req.json();
-    const { status, priority } = body;
+    const { status, priority, category, subject, user_name, user_email } = body;
 
     const updateData: Record<string, any> = {
       updated_at: new Date().toISOString(),
     };
     if (status) updateData.status = status;
     if (priority) updateData.priority = priority;
+    if (category) updateData.category = category;
+    if (subject) updateData.subject = subject.trim();
+    if (user_name) updateData.user_name = user_name.trim();
+    if (user_email) updateData.user_email = user_email.trim();
 
     const { data: updatedTicket, error } = await supabaseAdmin
       .from('support_tickets')

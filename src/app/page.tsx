@@ -42,7 +42,9 @@ import {
   MessageSquare,
   Copy,
   Phone,
-  CheckCircle2
+  CheckCircle2,
+  Edit3,
+  Globe
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useAdminAuth, PRIMARY_ADMIN_EMAIL } from '@/lib/admin-auth';
@@ -160,6 +162,12 @@ export default function AdminDashboardPage() {
   const [isSendingReply, setIsSendingReply] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [copiedTicketNo, setCopiedTicketNo] = useState(false);
+  const [sendReplyEmail, setSendReplyEmail] = useState(true);
+  const [isEditingTicket, setIsEditingTicket] = useState(false);
+  const [editTicketCategory, setEditTicketCategory] = useState('');
+  const [editTicketPriority, setEditTicketPriority] = useState('');
+  const [editTicketSubject, setEditTicketSubject] = useState('');
+  const [isSavingTicketEdit, setIsSavingTicketEdit] = useState(false);
 
   // Token Adjustment Modal State
   const [selectedUser, setSelectedUser] = useState<UserItem | null>(null);
@@ -284,6 +292,11 @@ export default function AdminDashboardPage() {
         const data = await res.json();
         if (data.success && data.ticket) {
           setSelectedTicketDetail(data.ticket);
+          setEditTicketCategory(data.ticket.category || 'Bantuan Umum');
+          setEditTicketPriority(data.ticket.priority || 'normal');
+          setEditTicketSubject(data.ticket.subject || '');
+          setIsEditingTicket(false);
+          setSendReplyEmail(Boolean(data.ticket.user_email));
           if (data.ticket.status === 'open') {
             setAdminReplyStatus('in_progress');
           } else if (data.ticket.status === 'resolved' || data.ticket.status === 'closed') {
@@ -297,6 +310,43 @@ export default function AdminDashboardPage() {
       console.error('Error loading ticket detail:', err);
     } finally {
       setIsLoadingDetail(false);
+    }
+  };
+
+  // Handle Save Ticket Edit (Category, Priority, Subject)
+  const handleSaveTicketEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTicketId) return;
+    setIsSavingTicketEdit(true);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+      const res = await fetch(`/api/admin/support/tickets/${selectedTicketId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          category: editTicketCategory,
+          priority: editTicketPriority,
+          subject: editTicketSubject,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setIsEditingTicket(false);
+        await fetchTicketDetail(selectedTicketId);
+        await fetchData();
+      } else {
+        alert(data.error || 'Gagal menyimpan perubahan tiket.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Gagal menyimpan perubahan tiket.');
+    } finally {
+      setIsSavingTicketEdit(false);
     }
   };
 
@@ -321,6 +371,7 @@ export default function AdminDashboardPage() {
           status: adminReplyStatus,
           notify_user: dispatchUserNotification,
           is_popup: replyWithPopup,
+          send_email: sendReplyEmail,
         }),
       });
       const data = await res.json();
@@ -1879,7 +1930,20 @@ export default function AdminDashboardPage() {
                           </div>
 
                           <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-800/60">
-                            <span className="truncate max-w-[150px]">{t.category}</span>
+                            <div className="flex items-center gap-1.5 truncate max-w-[180px]">
+                              {t.category === 'Email Bantuan' || (t.user_email && !t.user_id) ? (
+                                <span className="flex items-center gap-1 text-cyan-400 font-bold bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-800/50">
+                                  <Mail className="w-2.5 h-2.5" />
+                                  <span>Email Masuk</span>
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-1 text-slate-400 font-semibold bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
+                                  <Globe className="w-2.5 h-2.5" />
+                                  <span>Portal Web</span>
+                                </span>
+                              )}
+                              <span className="truncate">{t.category}</span>
+                            </div>
                             <span>{formatDate(t.created_at)}</span>
                           </div>
                         </div>
@@ -1932,8 +1996,17 @@ export default function AdminDashboardPage() {
                           </span>
                         </div>
 
-                        {/* Quick Status Buttons */}
+                        {/* Quick Actions & Edit Button */}
                         <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingTicket(!isEditingTicket)}
+                            className="px-2.5 py-1 rounded-lg text-[11px] font-bold border transition bg-slate-900 text-amber-400 border-amber-900/50 hover:bg-amber-950/50 flex items-center gap-1"
+                            title="Edit data tiket"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            <span>{isEditingTicket ? 'Tutup Edit' : 'Edit Tiket'}</span>
+                          </button>
                           <button
                             type="button"
                             onClick={() => handleQuickUpdateStatus(selectedTicketDetail.id, 'in_progress')}
@@ -1959,9 +2032,84 @@ export default function AdminDashboardPage() {
                         </div>
                       </div>
 
-                      <h3 className="text-base font-black text-white">
-                        {selectedTicketDetail.subject}
-                      </h3>
+                      {/* Inline Edit Form */}
+                      {isEditingTicket ? (
+                        <form
+                          onSubmit={handleSaveTicketEdit}
+                          className="p-3.5 rounded-xl bg-slate-900/95 border border-amber-500/40 space-y-3 shadow-lg"
+                        >
+                          <div className="flex items-center justify-between text-xs font-bold text-amber-300">
+                            <span>✏️ Perbarui Data Tiket #{selectedTicketDetail.ticket_number}</span>
+                            <span className="text-[10px] text-slate-400">Tersimpan ke database</span>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[11px] text-slate-300 font-semibold block">Subjek / Masalah Tiket:</label>
+                            <input
+                              type="text"
+                              value={editTicketSubject}
+                              onChange={(e) => setEditTicketSubject(e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                              required
+                            />
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <label className="text-[11px] text-slate-300 font-semibold block">Kategori:</label>
+                              <select
+                                value={editTicketCategory}
+                                onChange={(e) => setEditTicketCategory(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                              >
+                                <option value="Bantuan Umum">Bantuan Umum</option>
+                                <option value="Email Bantuan">Email Bantuan (support@bikinkilat.web.id)</option>
+                                <option value="Kendala Transaksi/QRIS">Kendala Transaksi / QRIS</option>
+                                <option value="Aktivasi Token">Aktivasi Token</option>
+                                <option value="Fitur Dokumen/Slide">Fitur Dokumen & Slide</option>
+                                <option value="Akun & Login">Akun & Login</option>
+                              </select>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[11px] text-slate-300 font-semibold block">Tingkat Prioritas:</label>
+                              <select
+                                value={editTicketPriority}
+                                onChange={(e) => setEditTicketPriority(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                              >
+                                <option value="low">Rendah (Low)</option>
+                                <option value="normal">Normal</option>
+                                <option value="high">Tinggi (High)</option>
+                                <option value="urgent">Mendesak (Urgent)</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-end gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => setIsEditingTicket(false)}
+                              className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white bg-slate-800 transition"
+                            >
+                              Batal
+                            </button>
+                            <button
+                              type="submit"
+                              disabled={isSavingTicketEdit}
+                              className="px-4 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white flex items-center gap-1.5 transition disabled:opacity-50"
+                            >
+                              {isSavingTicketEdit ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                              <span>Simpan Perubahan</span>
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="text-base font-black text-white">
+                            {selectedTicketDetail.subject}
+                          </h3>
+                          <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-900 border border-slate-800 text-slate-400">
+                            Prioritas: <strong className="text-white uppercase">{selectedTicketDetail.priority || 'NORMAL'}</strong>
+                          </span>
+                        </div>
+                      )}
 
                       {/* Customer Info Strip */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800/80 text-xs">
@@ -2091,6 +2239,22 @@ export default function AdminDashboardPage() {
                       </div>
                     </div>
 
+                    {/* Identity Privacy Protection Banner */}
+                    <div className="flex flex-wrap items-center justify-between gap-2.5 p-3 rounded-2xl bg-slate-950 border border-emerald-500/30 text-xs">
+                      <div className="flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span className="text-slate-300">
+                          Identitas Pengirim Resmi:{' '}
+                          <strong className="text-emerald-400 font-mono">
+                            Customer Support BikinKilat &lt;support@bikinkilat.web.id&gt;
+                          </strong>
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-emerald-400/80 font-medium bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-800/40">
+                        🔒 Email pribadi admin tersembunyi aman
+                      </span>
+                    </div>
+
                     {/* Admin Reply Form */}
                     <form onSubmit={handleAdminReply} className="space-y-4 pt-1">
                       <div className="space-y-1.5">
@@ -2134,6 +2298,22 @@ export default function AdminDashboardPage() {
                             />
                             <span>Kirim notifikasi ke akun user</span>
                           </label>
+
+                          {/* Checkbox: Dispatch Outbound Email */}
+                          {selectedTicketDetail.user_email && (
+                            <label className="flex items-center gap-1.5 text-xs text-cyan-300 cursor-pointer select-none bg-cyan-950/40 px-2 py-1 rounded-lg border border-cyan-800/40">
+                              <input
+                                type="checkbox"
+                                checked={sendReplyEmail}
+                                onChange={(e) => setSendReplyEmail(e.target.checked)}
+                                className="rounded border-slate-700 text-cyan-500 focus:ring-cyan-400 bg-slate-900"
+                              />
+                              <Mail className="w-3.5 h-3.5 text-cyan-400" />
+                              <span className="truncate max-w-[200px]" title={selectedTicketDetail.user_email}>
+                                Kirim email ke {selectedTicketDetail.user_email}
+                              </span>
+                            </label>
+                          )}
 
                           {/* Checkbox: Popup alert */}
                           <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
