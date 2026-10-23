@@ -44,7 +44,9 @@ import {
   Phone,
   CheckCircle2,
   Edit3,
-  Globe
+  Globe,
+  Camera,
+  Image as ImageIcon,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useAdminAuth, PRIMARY_ADMIN_EMAIL } from '@/lib/admin-auth';
@@ -135,7 +137,17 @@ export default function AdminDashboardPage() {
   const { user, session, isAdmin, isLoading: isAuthLoading, signOut } = useAdminAuth();
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'notifications' | 'support' | 'settings'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'notifications' | 'support' | 'gallery' | 'settings'>('analytics');
+
+  // Gallery State
+  const [galleryList, setGalleryList] = useState<any[]>([]);
+  const [isAddGalleryOpen, setIsAddGalleryOpen] = useState(false);
+  const [newPhotoTitle, setNewPhotoTitle] = useState('');
+  const [newPhotoUrl, setNewPhotoUrl] = useState('');
+  const [newPhotoCategory, setNewPhotoCategory] = useState<'Aktivitas' | 'Proyek' | 'Sertifikat' | 'Sekolah'>('Aktivitas');
+  const [newPhotoDesc, setNewPhotoDesc] = useState('');
+  const [newPhotoPinned, setNewPhotoPinned] = useState(false);
+  const [isSubmittingPhoto, setIsSubmittingPhoto] = useState(false);
 
   // Data states
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
@@ -269,6 +281,15 @@ export default function AdminDashboardPage() {
         }
       } else {
         console.warn('Support tickets fetch error:', await stRes.text());
+      }
+
+      // 6. Fetch Gallery
+      const gRes = await fetch(`/api/admin/gallery?_t=${timestamp}`, { headers, cache: 'no-store' });
+      if (gRes.ok) {
+        const gJson = await gRes.json();
+        if (gJson.success && Array.isArray(gJson.items)) {
+          setGalleryList(gJson.items);
+        }
       }
     } catch (e) {
       console.error('Error fetching admin data:', e);
@@ -539,6 +560,73 @@ export default function AdminDashboardPage() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  // Handle Gallery Submit
+  const handleCreatePhoto = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPhotoTitle.trim() || !newPhotoUrl.trim() || !user) return;
+    setIsSubmittingPhoto(true);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+      const res = await fetch('/api/admin/gallery', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          title: newPhotoTitle.trim(),
+          imageUrl: newPhotoUrl.trim(),
+          category: newPhotoCategory,
+          description: newPhotoDesc.trim(),
+          isPinned: newPhotoPinned,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.item) {
+        setGalleryList((prev) => [data.item, ...prev]);
+        setNewPhotoTitle('');
+        setNewPhotoUrl('');
+        setNewPhotoDesc('');
+        setNewPhotoPinned(false);
+        setIsAddGalleryOpen(false);
+        confetti({ particleCount: 70, spread: 50, origin: { y: 0.7 } });
+      } else {
+        alert(data.error || 'Gagal menyimpan foto ke galeri.');
+      }
+    } catch (err: any) {
+      alert('Terjadi kesalahan koneksi.');
+    } finally {
+      setIsSubmittingPhoto(false);
+    }
+  };
+
+  const handleDeletePhoto = async (id: string) => {
+    if (!confirm('Yakin ingin menghapus foto ini dari Galeri Pengembang?')) return;
+    try {
+      const headers: Record<string, string> = {
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+      const res = await fetch(`/api/admin/gallery?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers,
+      });
+      const data = await res.json();
+      if (data.success) {
+        setGalleryList((prev) => prev.filter((item) => item.id !== id));
+      } else {
+        alert(data.error || 'Gagal menghapus foto.');
+      }
+    } catch (err) {
+      alert('Terjadi kesalahan koneksi.');
+    }
   };
 
   // Handle Token Modification Submit
@@ -1089,6 +1177,22 @@ export default function AdminDashboardPage() {
                 {supportTickets.length}
               </span>
             )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('gallery')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition shrink-0 ${
+              activeTab === 'gallery'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Camera className="w-4 h-4" />
+            <span>Galeri Pengembang</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+              {galleryList.length || 5}
+            </span>
           </button>
 
           <button
@@ -2563,7 +2667,247 @@ export default function AdminDashboardPage() {
             </div>
           </div>
         )}
+
+        {/* TAB 7: DEVELOPER GALLERY MANAGEMENT */}
+        {activeTab === 'gallery' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Header & Controls */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-6 shadow-xl">
+              <div className="space-y-1.5">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-950/70 border border-indigo-800 text-indigo-300 text-xs font-bold">
+                  <Camera className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Pengembang Resmi: Aditya Arta Putra (11 TJKT A)</span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-black text-white">
+                  Manajemen Galeri Pengembang
+                </h2>
+                <p className="text-xs text-slate-400 max-w-xl">
+                  Kelola koleksi foto dokumentasi kegiatan, proyek, sertifikat, dan sekolah yang tampil secara publik di halaman pengembang resmi.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <a
+                  href="https://bikinkilat.web.id/pengembang"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-2 transition"
+                >
+                  <span>Halaman Publik</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setIsAddGalleryOpen(true)}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 shadow-md shadow-emerald-600/20 transition hover:scale-105 active:scale-95"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Tambah Foto Baru</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Gallery Cards Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {galleryList.map((item) => (
+                <div
+                  key={item.id}
+                  className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-md flex flex-col justify-between group hover:border-slate-700 transition"
+                >
+                  <div className="relative aspect-[4/3] bg-slate-950 overflow-hidden">
+                    <img
+                      src={item.imageUrl}
+                      alt={item.title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
+                    />
+                    <div className="absolute top-3 left-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-950/80 text-white backdrop-blur-sm border border-slate-700">
+                        {item.category || 'Aktivitas'}
+                      </span>
+                    </div>
+                    {item.isPinned && (
+                      <div className="absolute top-3 right-3">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500 text-white shadow-sm">
+                          Utama
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-4 space-y-2 flex-1 flex flex-col justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-white line-clamp-1">
+                        {item.title}
+                      </h3>
+                      <p className="text-xs text-slate-400 line-clamp-2 mt-1">
+                        {item.description || 'Tidak ada deskripsi'}
+                      </p>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-800 flex items-center justify-between text-xs">
+                      <span className="text-[11px] text-slate-500">
+                        {item.date ? `Tahun ${item.date}` : 'Dokumentasi'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePhoto(item.id)}
+                        className="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 text-xs font-semibold flex items-center gap-1 transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Hapus</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </main>
+
+      {/* MODAL: TAMBAH FOTO GALERI PENGEMBANG */}
+      {isAddGalleryOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl relative">
+            <button
+              type="button"
+              onClick={() => setIsAddGalleryOpen(false)}
+              className="absolute top-6 right-6 p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                <Camera className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-white">Tambah Foto ke Galeri</h3>
+                <p className="text-xs text-slate-400">
+                  Foto baru akan langsung terbit di halaman pengembang resmi
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleCreatePhoto} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Judul Foto / Dokumentasi *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newPhotoTitle}
+                  onChange={(e) => setNewPhotoTitle(e.target.value)}
+                  placeholder="Contoh: Kunjungan Presentasi Proyek SMK"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Tautan URL Foto / Media *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newPhotoUrl}
+                  onChange={(e) => setNewPhotoUrl(e.target.value)}
+                  placeholder="https://... atau /developer/aditya-arta.jpg"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500"
+                />
+                <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-400">
+                  <span>Preset Foto Bawaan:</span>
+                  <button
+                    type="button"
+                    onClick={() => setNewPhotoUrl('/developer/aditya-arta.jpg')}
+                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  >
+                    Foto Utama
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewPhotoUrl('/developer/about-sec-image.jpeg')}
+                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
+                  >
+                    Foto Sekolah
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Kategori Dokumentasi
+                </label>
+                <select
+                  value={newPhotoCategory}
+                  onChange={(e) => setNewPhotoCategory(e.target.value as any)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white outline-none focus:border-indigo-500"
+                >
+                  <option value="Aktivitas">Aktivitas</option>
+                  <option value="Proyek">Proyek</option>
+                  <option value="Sertifikat">Sertifikat</option>
+                  <option value="Sekolah">Sekolah</option>
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Keterangan / Deskripsi Foto
+                </label>
+                <textarea
+                  rows={3}
+                  value={newPhotoDesc}
+                  onChange={(e) => setNewPhotoDesc(e.target.value)}
+                  placeholder="Tuliskan keterangan detail dokumentasi..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500 resize-none"
+                />
+              </div>
+
+              <label className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 hover:border-slate-700 cursor-pointer flex items-start gap-3 transition">
+                <input
+                  type="checkbox"
+                  checked={newPhotoPinned}
+                  onChange={(e) => setNewPhotoPinned(e.target.checked)}
+                  className="mt-1 w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-900 border-slate-700"
+                />
+                <div className="space-y-0.5">
+                  <span className="text-xs font-bold text-white block">
+                    Sematkan sebagai Foto Unggulan (Pinned)
+                  </span>
+                  <span className="text-[11px] text-slate-400 block leading-tight">
+                    Foto ini akan diberi badge 'Utama' dan tampil lebih menonjol di galeri
+                  </span>
+                </div>
+              </label>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddGalleryOpen(false)}
+                  className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingPhoto}
+                  className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-md transition disabled:opacity-50 flex items-center gap-2"
+                >
+                  {isSubmittingPhoto ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Menyimpan...</span>
+                    </>
+                  ) : (
+                    <span>Simpan ke Galeri</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* MODAL: TOKEN ADJUSTMENT (TAMBAH / POTONG / SETEL TOKEN) */}
       {selectedUser && (
