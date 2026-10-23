@@ -47,6 +47,8 @@ import {
   Globe,
   Camera,
   Image as ImageIcon,
+  Pin,
+  UploadCloud,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useAdminAuth, PRIMARY_ADMIN_EMAIL } from '@/lib/admin-auth';
@@ -137,7 +139,7 @@ export default function AdminDashboardPage() {
   const { user, session, isAdmin, isLoading: isAuthLoading, signOut } = useAdminAuth();
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'notifications' | 'support' | 'gallery' | 'settings'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'notifications' | 'support' | 'gallery' | 'guestbook' | 'settings'>('analytics');
 
   // Gallery State
   const [galleryList, setGalleryList] = useState<any[]>([]);
@@ -148,6 +150,15 @@ export default function AdminDashboardPage() {
   const [newPhotoDesc, setNewPhotoDesc] = useState('');
   const [newPhotoPinned, setNewPhotoPinned] = useState(false);
   const [isSubmittingPhoto, setIsSubmittingPhoto] = useState(false);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+
+  // Guestbook / Komentar State
+  const [guestbookList, setGuestbookList] = useState<any[]>([]);
+  const [guestbookSearch, setGuestbookSearch] = useState('');
+  const [guestbookFilter, setGuestbookFilter] = useState<'all' | 'pinned' | 'regular'>('all');
+  const [isDeletingGuestbookId, setIsDeletingGuestbookId] = useState<string | null>(null);
+  const [isTogglingPinId, setIsTogglingPinId] = useState<string | null>(null);
 
   // Data states
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
@@ -289,6 +300,15 @@ export default function AdminDashboardPage() {
         const gJson = await gRes.json();
         if (gJson.success && Array.isArray(gJson.items)) {
           setGalleryList(gJson.items);
+        }
+      }
+
+      // 7. Fetch Guestbook / Komentar
+      const gbRes = await fetch(`/api/admin/guestbook?_t=${timestamp}`, { headers, cache: 'no-store' });
+      if (gbRes.ok) {
+        const gbJson = await gbRes.json();
+        if (gbJson.success && Array.isArray(gbJson.entries)) {
+          setGuestbookList(gbJson.entries);
         }
       }
     } catch (e) {
@@ -626,6 +646,105 @@ export default function AdminDashboardPage() {
       }
     } catch (err) {
       alert('Terjadi kesalahan koneksi.');
+    }
+  };
+
+  // Upload Photo directly to Cloud Storage (Supabase Storage)
+  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingPhoto(true);
+    setUploadProgress('Mengunggah ke penyimpanan cloud...');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const headers: Record<string, string> = {
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch('/api/admin/upload', {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (data.success && data.publicUrl) {
+        setNewPhotoUrl(data.publicUrl);
+        setUploadProgress('Foto berhasil diunggah ke penyimpanan cloud!');
+        setTimeout(() => setUploadProgress(null), 3000);
+      } else {
+        alert(data.error || 'Gagal mengunggah foto.');
+        setUploadProgress(null);
+      }
+    } catch (err) {
+      alert('Terjadi kesalahan koneksi saat mengunggah foto.');
+      setUploadProgress(null);
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
+  // Guestbook Management Handlers
+  const handleDeleteGuestbook = async (id: string) => {
+    if (!confirm('Apakah Anda yakin ingin MENGHAPUS komentar ini secara permanen dari buku tamu publik?')) return;
+    setIsDeletingGuestbookId(id);
+    try {
+      const headers: Record<string, string> = {
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+      const res = await fetch(`/api/admin/guestbook?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers,
+      });
+      const data = await res.json();
+      if (data.success) {
+        setGuestbookList((prev) => prev.filter((item) => item.id !== id));
+        confetti({ particleCount: 50, spread: 40, origin: { y: 0.7 } });
+      } else {
+        alert(data.error || 'Gagal menghapus komentar.');
+      }
+    } catch (err) {
+      alert('Terjadi kesalahan koneksi.');
+    } finally {
+      setIsDeletingGuestbookId(null);
+    }
+  };
+
+  const handleTogglePinGuestbook = async (id: string, currentPinned: boolean) => {
+    setIsTogglingPinId(id);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+      const res = await fetch('/api/admin/guestbook', {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ id, isPinned: !currentPinned }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setGuestbookList((prev) =>
+          prev.map((item) => (item.id === id ? { ...item, isPinned: !currentPinned } : item))
+        );
+      } else {
+        alert(data.error || 'Gagal mengubah status semat.');
+      }
+    } catch (err) {
+      alert('Terjadi kesalahan koneksi.');
+    } finally {
+      setIsTogglingPinId(null);
     }
   };
 
@@ -1192,6 +1311,22 @@ export default function AdminDashboardPage() {
             <span>Galeri Pengembang</span>
             <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
               {galleryList.length || 5}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('guestbook')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition shrink-0 ${
+              activeTab === 'guestbook'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <MessageSquare className="w-4 h-4" />
+            <span>Buku Tamu / Komentar</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+              {guestbookList.length}
             </span>
           </button>
 
@@ -2763,6 +2898,201 @@ export default function AdminDashboardPage() {
             </div>
           </div>
         )}
+
+        {/* TAB 8: GUESTBOOK / KOMENTAR MANAGEMENT */}
+        {activeTab === 'guestbook' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Header & Controls */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-6 shadow-xl">
+              <div className="space-y-1.5">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/70 border border-emerald-800 text-emerald-300 text-xs font-bold">
+                  <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Buku Tamu Pengunjung Publik</span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-black text-white">
+                  Manajemen Buku Tamu &amp; Komentar
+                </h2>
+                <p className="text-xs text-slate-400 max-w-xl">
+                  Kelola dan moderasi seluruh pesan sapaan, apresiasi, dan masukan pengunjung di halaman pengembang. Hapus pesan spam atau sematkan komentar terbaik.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <a
+                  href="https://bikinkilat.web.id/pengembang#kontak"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-2 transition"
+                >
+                  <span>Lihat di Halaman Publik</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+            </div>
+
+            {/* Stat Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-400">Total Komentar</span>
+                  <p className="text-2xl font-black text-white mt-1">{guestbookList.length}</p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300">
+                  <MessageSquare className="w-5 h-5" />
+                </div>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-amber-400">Komentar Disematkan</span>
+                  <p className="text-2xl font-black text-white mt-1">
+                    {guestbookList.filter((e) => e.isPinned).length}
+                  </p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
+                  <Pin className="w-5 h-5" />
+                </div>
+              </div>
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-emerald-400">Komentar Reguler</span>
+                  <p className="text-2xl font-black text-white mt-1">
+                    {guestbookList.filter((e) => !e.isPinned).length}
+                  </p>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                  <CheckCircle2 className="w-5 h-5" />
+                </div>
+              </div>
+            </div>
+
+            {/* Search & Filter Bar */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={guestbookSearch}
+                  onChange={(e) => setGuestbookSearch(e.target.value)}
+                  placeholder="Cari nama, peran/instansi, atau isi pesan..."
+                  className="w-full pl-10 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-500 transition"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                {(['all', 'pinned', 'regular'] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    onClick={() => setGuestbookFilter(filter)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition capitalize ${
+                      guestbookFilter === filter
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {filter === 'all' ? 'Semua' : filter === 'pinned' ? 'Disematkan' : 'Reguler'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Guestbook Entries List */}
+            <div className="space-y-3">
+              {guestbookList
+                .filter((item) => {
+                  if (guestbookFilter === 'pinned' && !item.isPinned) return false;
+                  if (guestbookFilter === 'regular' && item.isPinned) return false;
+                  if (guestbookSearch.trim()) {
+                    const q = guestbookSearch.toLowerCase();
+                    const n = (item.name || '').toLowerCase();
+                    const r = (item.role || '').toLowerCase();
+                    const m = (item.message || '').toLowerCase();
+                    return n.includes(q) || r.includes(q) || m.includes(q);
+                  }
+                  return true;
+                })
+                .map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="p-5 rounded-2xl bg-slate-900 border border-slate-800/80 hover:border-slate-700 transition flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm"
+                  >
+                    <div className="flex items-start gap-3.5 flex-1 min-w-0">
+                      <div className="w-11 h-11 rounded-2xl bg-slate-800 border border-slate-700/80 flex items-center justify-center text-xl shrink-0 shadow-inner">
+                        {entry.avatar || '🚀'}
+                      </div>
+                      <div className="space-y-1 min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h4 className="text-sm font-extrabold text-white truncate">
+                            {entry.name}
+                          </h4>
+                          {entry.isPinned && (
+                            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                              DISEMATKAN
+                            </span>
+                          )}
+                          <span className="text-[11px] text-slate-500">
+                            {new Date(entry.createdAt).toLocaleDateString('id-ID', {
+                              day: 'numeric',
+                              month: 'short',
+                              year: 'numeric',
+                            })}
+                          </span>
+                        </div>
+                        {entry.role && (
+                          <p className="text-xs text-indigo-400 font-semibold truncate">
+                            {entry.role}
+                          </p>
+                        )}
+                        <p className="text-xs text-slate-300 leading-relaxed pt-1 whitespace-pre-wrap">
+                          &ldquo;{entry.message}&rdquo;
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 self-end sm:self-center shrink-0 border-t sm:border-t-0 pt-3 sm:pt-0 border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => handleTogglePinGuestbook(entry.id, Boolean(entry.isPinned))}
+                        disabled={isTogglingPinId === entry.id}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
+                          entry.isPinned
+                            ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/30'
+                            : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'
+                        }`}
+                        title={entry.isPinned ? 'Lepas Sematan' : 'Sematkan Komentar'}
+                      >
+                        <Pin className="w-3.5 h-3.5" />
+                        <span>{entry.isPinned ? 'Lepas Pin' : 'Sematkan'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteGuestbook(entry.id)}
+                        disabled={isDeletingGuestbookId === entry.id}
+                        className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 text-xs font-bold flex items-center gap-1.5 transition shadow-sm active:scale-95"
+                        title="Hapus Komentar ini secara permanen"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>
+                          {isDeletingGuestbookId === entry.id ? 'Menghapus...' : 'Hapus Komentar'}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+              {guestbookList.length === 0 && (
+                <div className="p-12 text-center rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
+                  <MessageSquare className="w-8 h-8 text-slate-600 mx-auto" />
+                  <p className="text-sm font-bold text-slate-300">Belum ada komentar di buku tamu</p>
+                  <p className="text-xs text-slate-500">
+                    Pesan yang dikirim pengunjung melalui halaman pengembang akan muncul di sini.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </main>
 
       {/* MODAL: TAMBAH FOTO GALERI PENGEMBANG */}
@@ -2804,6 +3134,40 @@ export default function AdminDashboardPage() {
                 />
               </div>
 
+              <div className="space-y-2 p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                    <UploadCloud className="w-4 h-4 text-emerald-400" />
+                    <span>Upload Foto Langsung ke Cloud Storage</span>
+                  </label>
+                  {isUploadingPhoto && (
+                    <span className="text-[10px] text-amber-400 animate-pulse font-bold">Mengunggah...</span>
+                  )}
+                </div>
+                <input
+                  type="file"
+                  id="file-upload-input"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  onChange={handleUploadFile}
+                  disabled={isUploadingPhoto}
+                  className="hidden"
+                />
+                <label
+                  htmlFor="file-upload-input"
+                  className={`w-full py-2.5 px-4 rounded-xl border border-dashed text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition ${
+                    isUploadingPhoto
+                      ? 'border-amber-500/50 bg-amber-500/10 text-amber-300 pointer-events-none'
+                      : 'border-slate-700 hover:border-emerald-500 bg-slate-900 hover:bg-emerald-950/30 text-slate-300 hover:text-white'
+                  }`}
+                >
+                  <ImageIcon className="w-4 h-4 text-emerald-400" />
+                  <span>{isUploadingPhoto ? 'Sedang Memproses Unggahan...' : 'Pilih File Gambar dari Perangkat (Maks 10MB)'}</span>
+                </label>
+                {uploadProgress && (
+                  <p className="text-[11px] text-emerald-400 font-medium">{uploadProgress}</p>
+                )}
+              </div>
+
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-300 block">
                   Tautan URL Foto / Media *
@@ -2813,21 +3177,21 @@ export default function AdminDashboardPage() {
                   required
                   value={newPhotoUrl}
                   onChange={(e) => setNewPhotoUrl(e.target.value)}
-                  placeholder="https://... atau /developer/aditya-arta.jpg"
+                  placeholder="https://oonozobspxhvztoikakt.supabase.co/storage/v1/object/public/developer-assets/..."
                   className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500"
                 />
                 <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-400">
                   <span>Preset Foto Bawaan:</span>
                   <button
                     type="button"
-                    onClick={() => setNewPhotoUrl('/developer/aditya-arta.jpg')}
+                    onClick={() => setNewPhotoUrl('https://oonozobspxhvztoikakt.supabase.co/storage/v1/object/public/developer-assets/aditya-arta.jpg')}
                     className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
                   >
                     Foto Utama
                   </button>
                   <button
                     type="button"
-                    onClick={() => setNewPhotoUrl('/developer/about-sec-image.jpeg')}
+                    onClick={() => setNewPhotoUrl('https://oonozobspxhvztoikakt.supabase.co/storage/v1/object/public/developer-assets/about-sec-image.jpeg')}
                     className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
                   >
                     Foto Sekolah
