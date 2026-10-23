@@ -384,20 +384,24 @@ export default function AdminDashboardPage() {
         await fetchData();
         confetti({ particleCount: 35, spread: 60, origin: { y: 0.8 } });
 
-        // If email dispatch had a note or wasn't sent, notify admin & prompt Gmail compose
-        if (sendReplyEmail && selectedTicketDetail?.user_email && !data.email_sent) {
-          const openGmail = window.confirm(
-            `Balasan resmi tersimpan di tiket!\n\nCatatan Email: ${data.email_note || 'Kunci API pengirim email belum aktif'}.\n\nApakah Anda ingin membuka Gmail sekarang untuk mengirimkan balasan ini langsung ke ${selectedTicketDetail.user_email}?`
-          );
-          if (openGmail) {
-            const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
-              selectedTicketDetail.user_email
-            )}&su=${encodeURIComponent(
-              `Re: [${selectedTicketDetail.ticket_number}] ${selectedTicketDetail.subject}`
-            )}&body=${encodeURIComponent(
-              `Halo ${selectedTicketDetail.user_name || 'Pelanggan BikinKilat'},\n\n${replyMsg}\n\n---\nTim Customer Support BikinKilat\nWebsite: https://bikinkilat.web.id\nNomor Tiket: #${selectedTicketDetail.ticket_number}\nEmail Bantuan: support@bikinkilat.web.id`
-            )}`;
-            window.open(gmailUrl, '_blank');
+        // If email was requested, notify admin on success or prompt Gmail compose on fallback
+        if (sendReplyEmail && selectedTicketDetail?.user_email) {
+          if (data.email_sent) {
+            alert(`Balasan resmi tersimpan di tiket dan email balasan telah BERHASIL terkirim langsung ke ${selectedTicketDetail.user_email}!`);
+          } else {
+            const openGmail = window.confirm(
+              `Balasan resmi tersimpan di tiket!\n\nCatatan Email: ${data.email_note || 'Kunci API pengirim email belum aktif'}.\n\nApakah Anda ingin membuka Gmail sekarang untuk mengirimkan balasan ini langsung ke ${selectedTicketDetail.user_email}?`
+            );
+            if (openGmail) {
+              const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
+                selectedTicketDetail.user_email
+              )}&su=${encodeURIComponent(
+                `Re: [${selectedTicketDetail.ticket_number}] ${selectedTicketDetail.subject}`
+              )}&body=${encodeURIComponent(
+                `Halo ${selectedTicketDetail.user_name || 'Pelanggan BikinKilat'},\n\n${replyMsg}\n\n---\nTim Customer Support BikinKilat\nWebsite: https://bikinkilat.web.id\nNomor Tiket: #${selectedTicketDetail.ticket_number}\nEmail Bantuan: support@bikinkilat.web.id`
+              )}`;
+              window.open(gmailUrl, '_blank');
+            }
           }
         }
       } else {
