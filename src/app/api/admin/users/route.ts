@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
 
     let query = supabaseAdmin
       .from('users')
-      .select('id, email, name, tokens, created_at, updated_at')
+      .select('id, email, name, tokens, created_at, updated_at, deletion_status, deletion_requested_at')
       .order('created_at', { ascending: false });
 
     if (search) {
