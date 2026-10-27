@@ -79,6 +79,17 @@ interface SupportTicketItem {
   user_tokens?: number | null;
 }
 
+interface DeletionRequestItem {
+  id: string;
+  user_id: string;
+  user_email: string;
+  user_name: string;
+  tokens_remaining: number;
+  reason: string;
+  status: 'pending' | 'completed' | 'cancelled';
+  requested_at: string;
+}
+
 interface UserItem {
   id: string;
   email: string;
@@ -86,6 +97,8 @@ interface UserItem {
   tokens: number;
   created_at: string;
   updated_at?: string;
+  deletion_status?: string | null;
+  deletion_requested_at?: string | null;
 }
 
 interface NotificationAdminItem {
@@ -139,7 +152,13 @@ export default function AdminDashboardPage() {
   const { user, session, isAdmin, isLoading: isAuthLoading, signOut } = useAdminAuth();
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'notifications' | 'support' | 'gallery' | 'guestbook' | 'settings'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'notifications' | 'support' | 'deletions' | 'gallery' | 'guestbook' | 'settings'>('analytics');
+
+  // Deletion Requests State
+  const [deletionRequests, setDeletionRequests] = useState<DeletionRequestItem[]>([]);
+  const [deletionFilter, setDeletionFilter] = useState<'all' | 'pending' | 'completed' | 'cancelled'>('all');
+  const [deletionSearch, setDeletionSearch] = useState('');
+  const [isProcessingDeletionId, setIsProcessingDeletionId] = useState<string | null>(null);
 
   // Gallery State
   const [galleryList, setGalleryList] = useState<any[]>([]);
@@ -309,6 +328,15 @@ export default function AdminDashboardPage() {
         const gbJson = await gbRes.json();
         if (gbJson.success && Array.isArray(gbJson.entries)) {
           setGuestbookList(gbJson.entries);
+        }
+      }
+
+      // 8. Fetch Account Deletion Requests (<24 Jam Queue)
+      const delRes = await fetch(`/api/admin/deletion-requests?_t=${timestamp}`, { headers, cache: 'no-store' });
+      if (delRes.ok) {
+        const delJson = await delRes.json();
+        if (delJson.success && Array.isArray(delJson.requests)) {
+          setDeletionRequests(delJson.requests);
         }
       }
     } catch (e) {
@@ -748,6 +776,88 @@ export default function AdminDashboardPage() {
     }
   };
 
+  // Handle Purge User Permanently
+  const handlePurgeUser = async (requestId: string, userId: string, userName: string, userEmail: string) => {
+    const confirmText = window.prompt(
+      `PERINGATAN KERAS: HAPUS AKUN SECARA PERMANEN?\n\nPengguna: ${userName} (${userEmail})\nID: ${userId}\n\nSeluruh data, saldo token, dan otentikasi akun ini akan DIHAPUS BERSIH secara permanen dari basis data.\n\nKetik "HAPUS" untuk mengeksekusi:`
+    );
+    if (confirmText !== 'HAPUS') return;
+
+    setIsProcessingDeletionId(requestId);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch('/api/admin/deletion-requests', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          action: 'purge',
+          requestId,
+          userId,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        alert(`Akun ${userEmail} berhasil dihapus permanen oleh Admin.`);
+        await fetchData();
+      } else {
+        alert(data.error || 'Gagal mengeksekusi penghapusan akun.');
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Terjadi kesalahan sistem.');
+    } finally {
+      setIsProcessingDeletionId(null);
+    }
+  };
+
+  // Handle Cancel Deletion Request
+  const handleCancelDeletion = async (requestId: string, userId: string, userEmail: string) => {
+    const isConfirmed = window.confirm(
+      `Batalkan permintaan hapus akun untuk ${userEmail}?\n\nAkun akan dikembalikan ke status aktif normal.`
+    );
+    if (!isConfirmed) return;
+
+    setIsProcessingDeletionId(requestId);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch('/api/admin/deletion-requests', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          action: 'cancel',
+          requestId,
+          userId,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        alert(`Permintaan penghapusan ${userEmail} berhasil dibatalkan. Status akun telah dipulihkan.`);
+        await fetchData();
+      } else {
+        alert(data.error || 'Gagal membatalkan permintaan.');
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Terjadi kesalahan sistem.');
+    } finally {
+      setIsProcessingDeletionId(null);
+    }
+  };
+
   // Handle Token Modification Submit
   const handleModifyTokens = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1057,6 +1167,48 @@ export default function AdminDashboardPage() {
     });
   }, [supportTickets, supportSourceFilter, supportFilterStatus, supportSearch]);
 
+  // Filtered & Stats Deletion Requests (<24 Jam SLA)
+  const filteredDeletions = useMemo(() => {
+    return deletionRequests.filter((r) => {
+      const matchStatus = deletionFilter === 'all' || r.status === deletionFilter;
+      const q = deletionSearch.toLowerCase();
+      const matchSearch =
+        !deletionSearch ||
+        r.user_email?.toLowerCase().includes(q) ||
+        r.user_name?.toLowerCase().includes(q) ||
+        r.user_id?.toLowerCase().includes(q) ||
+        r.reason?.toLowerCase().includes(q);
+      return matchStatus && matchSearch;
+    });
+  }, [deletionRequests, deletionFilter, deletionSearch]);
+
+  const deletionStats = useMemo(() => {
+    const total = deletionRequests.length;
+    const pending = deletionRequests.filter((r) => r.status === 'pending').length;
+    const completed = deletionRequests.filter((r) => r.status === 'completed').length;
+    const cancelled = deletionRequests.filter((r) => r.status === 'cancelled').length;
+    const burnedTokens = deletionRequests
+      .filter((r) => r.status === 'completed')
+      .reduce((acc, curr) => acc + (curr.tokens_remaining || 0), 0);
+    return { total, pending, completed, cancelled, burnedTokens };
+  }, [deletionRequests]);
+
+  const getDeletionDeadlineInfo = (isoString?: string) => {
+    if (!isoString) return { elapsedHours: 0, hoursRemaining: 24, isOverdue: false, text: '-' };
+    const requestedTime = new Date(isoString).getTime();
+    const now = Date.now();
+    const elapsedMs = Math.max(0, now - requestedTime);
+    const elapsedHours = Math.floor(elapsedMs / (1000 * 60 * 60));
+    const hoursRemaining = Math.max(0, 24 - elapsedHours);
+    const isOverdue = elapsedHours >= 24;
+    return {
+      elapsedHours,
+      hoursRemaining,
+      isOverdue,
+      text: isOverdue ? `Jatuh tempo SLA (lewat ${elapsedHours - 24} jam)` : `Batas SLA: sisa ${hoursRemaining} jam`,
+    };
+  };
+
   // WhatsApp helper
   const getWhatsAppUrl = (phone: string, ticketNum: string, userName: string) => {
     const cleanPhone = phone.replace(/[^0-9]/g, '');
@@ -1294,6 +1446,28 @@ export default function AdminDashboardPage() {
             ) : (
               <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
                 {supportTickets.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('deletions')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition shrink-0 ${
+              activeTab === 'deletions'
+                ? 'bg-rose-600 text-white shadow-md shadow-rose-600/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Trash2 className="w-4 h-4 text-rose-400" />
+            <span>Permintaan Hapus Akun</span>
+            {deletionStats.pending > 0 ? (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse shadow-sm">
+                {deletionStats.pending} Antrean
+              </span>
+            ) : (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+                {deletionRequests.length}
               </span>
             )}
           </button>
@@ -1598,7 +1772,24 @@ export default function AdminDashboardPage() {
                                 {u.email?.charAt(0).toUpperCase() || 'U'}
                               </div>
                               <div>
-                                <span className="font-bold text-white block">{u.name || 'Pengguna BikinKilat'}</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-white block">{u.name || 'Pengguna BikinKilat'}</span>
+                                  {u.deletion_status === 'pending' && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setDeletionSearch(u.email);
+                                        setActiveTab('deletions');
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition animate-pulse"
+                                      title="Klik untuk melihat antrean hapus akun pengguna ini"
+                                    >
+                                      <Trash2 className="w-3 h-3 text-rose-400" />
+                                      Minta Hapus (&lt;24 Jam)
+                                    </button>
+                                  )}
+                                </div>
                                 <span className="text-[11px] text-slate-400 font-mono">{u.email}</span>
                               </div>
                             </div>
@@ -3090,6 +3281,330 @@ export default function AdminDashboardPage() {
                   </p>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 9: PERMINTAAN HAPUS AKUN (<24 JAM QUEUE) */}
+        {activeTab === 'deletions' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Header & Controls */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-6 shadow-xl">
+              <div className="space-y-1.5">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-950/70 border border-rose-800/80 text-rose-300 text-xs font-bold">
+                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Kebijakan SLA &lt;24 Jam Penghapusan Akun</span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-black text-white">
+                  Antrean Permintaan Hapus Akun
+                </h2>
+                <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
+                  Daftar permintaan penutupan dan penghapusan akun dari pengguna mandiri. Sesuai ketentuan privasi dan standar kepatuhan, permohonan wajib ditinjau dan dieksekusi atau dibatalkan dalam waktu maksimal 24 jam.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => fetchData()}
+                  disabled={isLoadingData}
+                  className="px-4 py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/80 text-xs font-bold flex items-center gap-2 transition active:scale-95 shadow-sm"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isLoadingData ? 'animate-spin text-emerald-400' : ''}`} />
+                  <span>Segarkan Antrean</span>
+                </button>
+              </div>
+            </div>
+
+            {/* KPI Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
+                <div className="flex items-center justify-between text-slate-400 text-xs font-bold">
+                  <span>Total Pengajuan</span>
+                  <Database className="w-4 h-4 text-slate-500" />
+                </div>
+                <div className="text-2xl font-black text-white">
+                  {deletionStats.total}
+                </div>
+                <p className="text-[11px] text-slate-500">Total riwayat permohonan</p>
+              </div>
+
+              <div className="bg-slate-900 border border-rose-900/40 rounded-2xl p-5 space-y-2 bg-gradient-to-br from-rose-950/20 to-slate-900">
+                <div className="flex items-center justify-between text-rose-400 text-xs font-bold">
+                  <span>Menunggu Eksekusi</span>
+                  <Clock className="w-4 h-4 text-rose-400 animate-pulse" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl font-black text-rose-400">
+                    {deletionStats.pending}
+                  </span>
+                  {deletionStats.pending > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
+                      Segera Tindak
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-rose-300/80">Batas SLA maksimal &lt;24 jam</p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
+                <div className="flex items-center justify-between text-slate-400 text-xs font-bold">
+                  <span>Selesai Dihapus</span>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                </div>
+                <div className="text-2xl font-black text-white">
+                  {deletionStats.completed}
+                </div>
+                <p className="text-[11px] text-slate-500">Telah dibersihkan permanen</p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
+                <div className="flex items-center justify-between text-slate-400 text-xs font-bold">
+                  <span>Token Terhanguskan</span>
+                  <Coins className="w-4 h-4 text-amber-400" />
+                </div>
+                <div className="text-2xl font-black text-amber-300">
+                  {deletionStats.burnedTokens.toLocaleString('id-ID')}
+                </div>
+                <p className="text-[11px] text-slate-500">Saldo token akun terhapus</p>
+              </div>
+            </div>
+
+            {/* Filter & Search Bar */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                <button
+                  type="button"
+                  onClick={() => setDeletionFilter('all')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                    deletionFilter === 'all'
+                      ? 'bg-emerald-600 text-white'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                >
+                  Semua ({deletionStats.total})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeletionFilter('pending')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap flex items-center gap-1.5 ${
+                    deletionFilter === 'pending'
+                      ? 'bg-rose-600 text-white'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                >
+                  <span>Menunggu (&lt;24 Jam)</span>
+                  {deletionStats.pending > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-white text-rose-600 font-black">
+                      {deletionStats.pending}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeletionFilter('completed')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                    deletionFilter === 'completed'
+                      ? 'bg-slate-700 text-white'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                >
+                  Selesai ({deletionStats.completed})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeletionFilter('cancelled')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                    deletionFilter === 'cancelled'
+                      ? 'bg-indigo-600 text-white'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                >
+                  Dibatalkan ({deletionStats.cancelled})
+                </button>
+              </div>
+
+              <div className="relative min-w-[240px]">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Cari email, nama, ID, alasan..."
+                  value={deletionSearch}
+                  onChange={(e) => setDeletionSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs placeholder:text-slate-500 focus:outline-none focus:border-rose-500 transition"
+                />
+              </div>
+            </div>
+
+            {/* Deletions List Table */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-950/80 border-b border-slate-800 text-slate-400 font-bold uppercase tracking-wider text-[11px]">
+                    <tr>
+                      <th className="py-4 px-6">Pengguna &amp; Identitas</th>
+                      <th className="py-4 px-6">Waktu Pengajuan &amp; SLA</th>
+                      <th className="py-4 px-6 text-center">Sisa Saldo</th>
+                      <th className="py-4 px-6">Alasan Permintaan</th>
+                      <th className="py-4 px-6 text-center">Status</th>
+                      <th className="py-4 px-6 text-right">Aksi Eksekusi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                    {filteredDeletions.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="py-14 text-center">
+                          <div className="max-w-md mx-auto space-y-2">
+                            <ShieldCheck className="w-9 h-9 text-emerald-500 mx-auto" />
+                            <p className="text-sm font-bold text-white">Tidak ada permohonan hapus akun</p>
+                            <p className="text-xs text-slate-500">
+                              {deletionFilter !== 'all' || deletionSearch
+                                ? 'Tidak ditemukan data yang cocok dengan kriteria pencarian atau filter aktif.'
+                                : 'Semua permohonan pengguna telah diselesaikan atau belum ada pengguna yang meminta penghapusan akun.'}
+                            </p>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredDeletions.map((req) => {
+                        const deadline = getDeletionDeadlineInfo(req.requested_at);
+                        const isPending = req.status === 'pending';
+                        const isProcessing = isProcessingDeletionId === req.id;
+
+                        return (
+                          <tr
+                            key={req.id}
+                            className={`hover:bg-slate-800/40 transition ${
+                              isPending ? 'bg-rose-950/10' : ''
+                            }`}
+                          >
+                            <td className="py-4 px-6">
+                              <div className="flex items-center gap-3">
+                                <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-rose-600 to-amber-600 text-white font-black text-xs flex items-center justify-center shrink-0 shadow-sm">
+                                  {req.user_email?.charAt(0).toUpperCase() || 'U'}
+                                </div>
+                                <div className="space-y-0.5">
+                                  <span className="font-bold text-white block">
+                                    {req.user_name || 'Pengguna BikinKilat'}
+                                  </span>
+                                  <span className="text-[11px] text-slate-400 font-mono block">
+                                    {req.user_email}
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 font-mono block truncate max-w-[150px]">
+                                    ID: {req.user_id}
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+
+                            <td className="py-4 px-6">
+                              <div className="space-y-1">
+                                <div className="text-slate-300 font-medium text-[11px]">
+                                  {formatDate(req.requested_at)}
+                                </div>
+                                {isPending ? (
+                                  <div
+                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black ${
+                                      deadline.isOverdue
+                                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse'
+                                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                    }`}
+                                  >
+                                    <Clock className="w-3 h-3" />
+                                    <span>{deadline.text}</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] text-slate-500 italic">
+                                    Selesai diproses
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+
+                            <td className="py-4 px-6 text-center">
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-amber-950/80 text-amber-300 border border-amber-800/80">
+                                <Coins className="w-3.5 h-3.5 fill-amber-300" />
+                                <span>{req.tokens_remaining?.toLocaleString('id-ID') || 0} Token</span>
+                              </span>
+                            </td>
+
+                            <td className="py-4 px-6 max-w-xs">
+                              <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 whitespace-pre-wrap">
+                                {req.reason || 'Permintaan mandiri pengguna melalui Dashboard'}
+                              </p>
+                            </td>
+
+                            <td className="py-4 px-6 text-center">
+                              {req.status === 'pending' && (
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse">
+                                  <Clock className="w-3.5 h-3.5" />
+                                  <span>Menunggu Tindakan (&lt;24 Jam)</span>
+                                </span>
+                              )}
+                              {req.status === 'completed' && (
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-slate-800 text-slate-400 border border-slate-700">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>Telah Dihapus Permanen</span>
+                                </span>
+                              )}
+                              {req.status === 'cancelled' && (
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Dibatalkan / Aktif</span>
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="py-4 px-6 text-right">
+                              {isPending ? (
+                                <div className="flex items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleCancelDeletion(req.id, req.user_id, req.user_email)
+                                    }
+                                    disabled={isProcessing}
+                                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-bold transition disabled:opacity-50"
+                                    title="Batalkan permintaan dan kembalikan akun pengguna ke status aktif"
+                                  >
+                                    Batalkan
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handlePurgeUser(
+                                        req.id,
+                                        req.user_id,
+                                        req.user_name,
+                                        req.user_email
+                                      )
+                                    }
+                                    disabled={isProcessing}
+                                    className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black flex items-center gap-1.5 transition shadow-md shadow-rose-600/30 active:scale-95 disabled:opacity-50"
+                                    title="Hapus bersih seluruh data pengguna dan akun otentikasi secara permanen"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>
+                                      {isProcessing ? 'Menghapus...' : 'Eksekusi Hapus'}
+                                    </span>
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-[11px] text-slate-500 italic">
+                                  {req.status === 'completed'
+                                    ? 'Basis data telah dibersihkan'
+                                    : 'Status akun normal'}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
