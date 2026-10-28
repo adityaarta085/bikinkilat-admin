@@ -152,7 +152,24 @@ export default function AdminDashboardPage() {
   const { user, session, isAdmin, isLoading: isAuthLoading, signOut } = useAdminAuth();
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'notifications' | 'support' | 'deletions' | 'gallery' | 'guestbook' | 'settings'>('analytics');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'users' | 'transactions' | 'notifications' | 'support' | 'deletions' | 'gallery' | 'guestbook' | 'settings' | 'external_services'>('analytics');
+
+  // External Services State
+  const [externalServicesList, setExternalServicesList] = useState<any[]>([]);
+  const [isServicesLoading, setIsServicesLoading] = useState(false);
+  const [isAddServiceOpen, setIsAddServiceOpen] = useState(false);
+  const [editingService, setEditingService] = useState<any | null>(null);
+  const [serviceTitle, setServiceTitle] = useState('');
+  const [serviceSlug, setServiceSlug] = useState('');
+  const [serviceSubtitle, setServiceSubtitle] = useState('');
+  const [serviceDesc, setServiceDesc] = useState('');
+  const [serviceTargetUrl, setServiceTargetUrl] = useState('');
+  const [serviceTokenCost, setServiceTokenCost] = useState(1);
+  const [serviceCategory, setServiceCategory] = useState('Pendidikan');
+  const [serviceBadge, setServiceBadge] = useState('Docx Ready');
+  const [serviceStatus, setServiceStatus] = useState<'active' | 'maintenance' | 'draft'>('active');
+  const [isSubmittingService, setIsSubmittingService] = useState(false);
+  const [isDeletingServiceId, setIsDeletingServiceId] = useState<string | null>(null);
 
   // Deletion Requests State
   const [deletionRequests, setDeletionRequests] = useState<DeletionRequestItem[]>([]);
@@ -337,6 +354,15 @@ export default function AdminDashboardPage() {
         const delJson = await delRes.json();
         if (delJson.success && Array.isArray(delJson.requests)) {
           setDeletionRequests(delJson.requests);
+        }
+      }
+
+      // 9. Fetch External Services (Alat Digital & Gemini Canvas)
+      const esRes = await fetch(`/api/admin/external-services?_t=${timestamp}`, { headers, cache: 'no-store' });
+      if (esRes.ok) {
+        const esJson = await esRes.json();
+        if (esJson.success && Array.isArray(esJson.items)) {
+          setExternalServicesList(esJson.items);
         }
       }
     } catch (e) {
@@ -773,6 +799,178 @@ export default function AdminDashboardPage() {
       alert('Terjadi kesalahan koneksi.');
     } finally {
       setIsTogglingPinId(null);
+    }
+  };
+
+  // External Services Handlers (Gemini Canvas & Dynamic Tools)
+  const handleOpenAddService = () => {
+    setEditingService(null);
+    setServiceTitle('');
+    setServiceSlug('');
+    setServiceSubtitle('');
+    setServiceDesc('');
+    setServiceTargetUrl('');
+    setServiceTokenCost(1);
+    setServiceCategory('Pendidikan');
+    setServiceBadge('Docx Ready');
+    setServiceStatus('active');
+    setIsAddServiceOpen(true);
+  };
+
+  const handleOpenEditService = (item: any) => {
+    setEditingService(item);
+    setServiceTitle(item.title);
+    setServiceSlug(item.slug);
+    setServiceSubtitle(item.subtitle || '');
+    setServiceDesc(item.description || '');
+    setServiceTargetUrl(item.target_url);
+    setServiceTokenCost(item.token_cost);
+    setServiceCategory(item.category || 'Pendidikan');
+    setServiceBadge(item.badge || '');
+    setServiceStatus(item.status || 'active');
+    setIsAddServiceOpen(true);
+  };
+
+  const handleSaveService = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!serviceTitle.trim() || !serviceTargetUrl.trim()) {
+      alert('Nama layanan dan URL target wajib diisi.');
+      return;
+    }
+    setIsSubmittingService(true);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      if (editingService) {
+        const res = await fetch('/api/admin/external-services', {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            id: editingService.id,
+            title: serviceTitle,
+            slug: serviceSlug,
+            subtitle: serviceSubtitle,
+            description: serviceDesc,
+            targetUrl: serviceTargetUrl,
+            tokenCost: serviceTokenCost,
+            category: serviceCategory,
+            badge: serviceBadge,
+            status: serviceStatus,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal memperbarui layanan');
+        setExternalServicesList((prev) =>
+          prev.map((s) => (s.id === editingService.id ? data.item : s))
+        );
+      } else {
+        const res = await fetch('/api/admin/external-services', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            title: serviceTitle,
+            slug: serviceSlug,
+            subtitle: serviceSubtitle,
+            description: serviceDesc,
+            targetUrl: serviceTargetUrl,
+            tokenCost: serviceTokenCost,
+            category: serviceCategory,
+            badge: serviceBadge,
+            status: serviceStatus,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal menambahkan layanan');
+        setExternalServicesList((prev) => [data.item, ...prev]);
+      }
+      setIsAddServiceOpen(false);
+      confetti({ particleCount: 50, spread: 60 });
+    } catch (err: any) {
+      alert(err.message || 'Terjadi kesalahan sistem.');
+    } finally {
+      setIsSubmittingService(false);
+    }
+  };
+
+  const handleToggleServiceStatus = async (item: any, newStatus: 'active' | 'maintenance' | 'draft') => {
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch('/api/admin/external-services', {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ id: item.id, status: newStatus }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setExternalServicesList((prev) =>
+        prev.map((s) => (s.id === item.id ? { ...s, status: newStatus } : s))
+      );
+    } catch (err: any) {
+      alert(err.message || 'Gagal mengubah status layanan');
+    }
+  };
+
+  const handleQuickTokenChange = async (item: any, delta: number) => {
+    const nextCost = Math.max(0, (item.token_cost || 0) + delta);
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch('/api/admin/external-services', {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ id: item.id, tokenCost: nextCost }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setExternalServicesList((prev) =>
+        prev.map((s) => (s.id === item.id ? { ...s, token_cost: nextCost } : s))
+      );
+    } catch (err: any) {
+      alert(err.message || 'Gagal mengubah tarif token');
+    }
+  };
+
+  const handleDeleteService = async (item: any) => {
+    if (!confirm(`Hapus layanan "${item.title}" secara permanen?`)) return;
+    setIsDeletingServiceId(item.id);
+    try {
+      const headers: Record<string, string> = {
+        'x-admin-email': user?.email || PRIMARY_ADMIN_EMAIL,
+      };
+      if (session?.access_token) {
+        headers['authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch(`/api/admin/external-services?id=${encodeURIComponent(item.id)}`, {
+        method: 'DELETE',
+        headers,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setExternalServicesList((prev) => prev.filter((s) => s.id !== item.id));
+    } catch (err: any) {
+      alert(err.message || 'Gagal menghapus layanan');
+    } finally {
+      setIsDeletingServiceId(null);
     }
   };
 
@@ -1501,6 +1699,22 @@ export default function AdminDashboardPage() {
             <span>Buku Tamu / Komentar</span>
             <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
               {guestbookList.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('external_services')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition shrink-0 ${
+              activeTab === 'external_services'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-indigo-400" />
+            <span>Layanan Eksternal &amp; Alat Digital</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+              {externalServicesList.length}
             </span>
           </button>
 
@@ -3608,6 +3822,237 @@ export default function AdminDashboardPage() {
             </div>
           </div>
         )}
+
+        {/* TAB 10: DYNAMIC EXTERNAL SERVICES (GEMINI CANVAS & DIGITAL TOOLS) */}
+        {activeTab === 'external_services' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Header & Controls */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-6 shadow-xl">
+              <div className="space-y-1.5">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-950/70 border border-indigo-800 text-indigo-300 text-xs font-bold">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Katalog Alat Bantu Digital Dinamis</span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-black text-white">
+                  Layanan &amp; Alat Eksternal
+                </h2>
+                <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
+                  Kelola tautan alat bantu digital (seperti Gemini Canvas atau alat otomasi lainnya). Anda dapat menambahkan layanan baru, menyesuaikan tarif token per sesi masuk, atau mengaktifkan status Pemeliharaan (Maintenance) kapan saja tanpa perlu mengubah kode.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleOpenAddService}
+                  className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-2 shadow-md shadow-indigo-600/20 transition hover:scale-105 active:scale-95"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Tambah Layanan Baru</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Metrics */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                <p className="text-xs text-slate-400 font-medium">Total Layanan</p>
+                <p className="text-2xl font-black text-white mt-1">{externalServicesList.length}</p>
+              </div>
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                <p className="text-xs text-slate-400 font-medium">Status Aktif</p>
+                <p className="text-2xl font-black text-emerald-400 mt-1">
+                  {externalServicesList.filter((s) => s.status === 'active').length}
+                </p>
+              </div>
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                <p className="text-xs text-slate-400 font-medium">Mode Pemeliharaan</p>
+                <p className="text-2xl font-black text-amber-400 mt-1">
+                  {externalServicesList.filter((s) => s.status === 'maintenance').length}
+                </p>
+              </div>
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                <p className="text-xs text-slate-400 font-medium">Status Draf</p>
+                <p className="text-2xl font-black text-slate-400 mt-1">
+                  {externalServicesList.filter((s) => s.status === 'draft').length}
+                </p>
+              </div>
+            </div>
+
+            {/* Services Cards Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {externalServicesList.map((item) => {
+                const isActive = item.status === 'active';
+                const isMaintenance = item.status === 'maintenance';
+
+                return (
+                  <div
+                    key={item.id}
+                    className="bg-slate-900 border border-slate-800 rounded-3xl p-6 flex flex-col justify-between space-y-6 shadow-md hover:border-slate-700 transition"
+                  >
+                    <div className="space-y-4">
+                      {/* Top Badges */}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                          {item.category || 'Pendidikan'}
+                        </span>
+
+                        {isActive && (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            <span>Aktif</span>
+                          </span>
+                        )}
+                        {isMaintenance && (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-500/10 text-amber-400 border border-amber-500/30 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3 text-amber-400" />
+                            <span>Pemeliharaan</span>
+                          </span>
+                        )}
+                        {item.status === 'draft' && (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-slate-800 text-slate-400 border border-slate-700">
+                            Draf
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Title & Subtitle */}
+                      <div>
+                        <h3 className="text-lg font-black text-white">{item.title}</h3>
+                        {item.subtitle && (
+                          <p className="text-xs font-semibold text-indigo-400 mt-1">{item.subtitle}</p>
+                        )}
+                      </div>
+
+                      {/* Description */}
+                      {item.description && (
+                        <p className="text-xs text-slate-400 leading-relaxed line-clamp-3">
+                          {item.description}
+                        </p>
+                      )}
+
+                      {/* Target URL */}
+                      <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-slate-400 font-mono truncate max-w-[200px]">
+                          {item.target_url}
+                        </span>
+                        <a
+                          href={item.target_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition"
+                          title="Buka URL Langsung"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
+
+                      {/* Token Cost Adjuster */}
+                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-300">Biaya Token:</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleQuickTokenChange(item, -1)}
+                            disabled={item.token_cost <= 0}
+                            className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 disabled:opacity-30 flex items-center justify-center font-bold text-xs"
+                            title="Kurangi 1 Token"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className="px-3 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-black min-w-[50px] text-center">
+                            {item.token_cost} Token
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleQuickTokenChange(item, 1)}
+                            className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center font-bold text-xs"
+                            title="Tambah 1 Token"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Status Selector Switch */}
+                      <div className="flex items-center justify-between pt-1">
+                        <span className="text-xs font-bold text-slate-300">Ubah Status:</span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleServiceStatus(item, 'active')}
+                            className={`px-2 py-1 rounded-md text-[10px] font-black transition ${
+                              isActive
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            Aktif
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleServiceStatus(item, 'maintenance')}
+                            className={`px-2 py-1 rounded-md text-[10px] font-black transition ${
+                              isMaintenance
+                                ? 'bg-amber-600 text-white'
+                                : 'bg-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                            title="Aktifkan Mode Pemeliharaan"
+                          >
+                            Maintenance
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleServiceStatus(item, 'draft')}
+                            className={`px-2 py-1 rounded-md text-[10px] font-black transition ${
+                              item.status === 'draft'
+                                ? 'bg-slate-600 text-white'
+                                : 'bg-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            Draf
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Bottom Action Buttons */}
+                    <div className="pt-4 border-t border-slate-800 flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditService(item)}
+                        className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition"
+                      >
+                        <Edit3 className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Edit Rinci</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteService(item)}
+                        disabled={isDeletingServiceId === item.id}
+                        className="px-3.5 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/20 text-xs font-bold flex items-center gap-1.5 transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>{isDeletingServiceId === item.id ? 'Menghapus...' : 'Hapus'}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {externalServicesList.length === 0 && (
+                <div className="col-span-full p-12 text-center rounded-3xl bg-slate-900 border border-slate-800 space-y-3">
+                  <Sparkles className="w-10 h-10 text-slate-600 mx-auto" />
+                  <h4 className="text-base font-bold text-white">Belum Ada Layanan Eksternal</h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                    Klik tombol &quot;Tambah Layanan Baru&quot; di atas untuk memasukkan alat bantu Gemini Canvas atau alat otomasi eksternal lainnya.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </main>
 
       {/* MODAL: TAMBAH FOTO GALERI PENGEMBANG */}
@@ -4165,6 +4610,204 @@ export default function AdminDashboardPage() {
                     </>
                   ) : (
                     <span>Hanguskan Saldo Sekarang</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: TAMBAH / EDIT LAYANAN EKSTERNAL */}
+      {isAddServiceOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            <button
+              type="button"
+              onClick={() => setIsAddServiceOpen(false)}
+              className="absolute top-6 right-6 p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                <Sparkles className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-white">
+                  {editingService ? 'Edit Layanan Eksternal' : 'Tambah Layanan Eksternal Baru'}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Tautan Gemini Canvas atau alat bantu otomasi publik
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveService} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Nama Layanan *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={serviceTitle}
+                  onChange={(e) => {
+                    setServiceTitle(e.target.value);
+                    if (!editingService && !serviceSlug) {
+                      setServiceSlug(
+                        e.target.value
+                          .toLowerCase()
+                          .replace(/[^a-z0-9]+/g, '-')
+                          .replace(/^-+|-+$/g, '')
+                      );
+                    }
+                  }}
+                  placeholder="Misal: Generator Perangkat Ajar"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-300 block">
+                    Slug ID Unik *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={serviceSlug}
+                    onChange={(e) => setServiceSlug(e.target.value)}
+                    placeholder="generator-perangkat-ajar"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-300 block">
+                    Biaya Token per Akses
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={serviceTokenCost}
+                    onChange={(e) => setServiceTokenCost(parseInt(e.target.value) || 0)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white outline-none focus:border-indigo-500 font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Sub-judul / Tagline Singkat
+                </label>
+                <input
+                  type="text"
+                  value={serviceSubtitle}
+                  onChange={(e) => setServiceSubtitle(e.target.value)}
+                  placeholder="Misal: Kurikulum Merdeka • Pendekatan Pembelajaran Mendalam"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  URL Target Eksternal (Gemini Canvas / Web Eksternal) *
+                </label>
+                <input
+                  type="url"
+                  required
+                  value={serviceTargetUrl}
+                  onChange={(e) => setServiceTargetUrl(e.target.value)}
+                  placeholder="https://share.gemini.google/..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-300 block">
+                    Kategori
+                  </label>
+                  <select
+                    value={serviceCategory}
+                    onChange={(e) => setServiceCategory(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white outline-none focus:border-indigo-500"
+                  >
+                    <option value="Pendidikan">Pendidikan</option>
+                    <option value="Akademik">Akademik</option>
+                    <option value="Bisnis">Bisnis</option>
+                    <option value="Karier">Karier</option>
+                    <option value="Desain">Desain</option>
+                    <option value="Kreatif">Kreatif</option>
+                    <option value="Produktivitas">Produktivitas</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-300 block">
+                    Status Layanan
+                  </label>
+                  <select
+                    value={serviceStatus}
+                    onChange={(e) => setServiceStatus(e.target.value as any)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white outline-none focus:border-indigo-500"
+                  >
+                    <option value="active">🟢 Aktif (Bisa Diakses)</option>
+                    <option value="maintenance">🟡 Pemeliharaan (Maintenance)</option>
+                    <option value="draft">⚪ Draf (Disembunyikan)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Badge Teks (Opsional)
+                </label>
+                <input
+                  type="text"
+                  value={serviceBadge}
+                  onChange={(e) => setServiceBadge(e.target.value)}
+                  placeholder="Misal: Format Word (.DOCX) Ready"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  Deskripsi Lengkap
+                </label>
+                <textarea
+                  rows={3}
+                  value={serviceDesc}
+                  onChange={(e) => setServiceDesc(e.target.value)}
+                  placeholder="Jelaskan manfaat dan keunggulan alat ini bagi pengguna..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white placeholder-slate-500 outline-none focus:border-indigo-500 resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsAddServiceOpen(false)}
+                  className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingService}
+                  className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-black text-xs shadow-md transition disabled:opacity-50 flex items-center gap-2"
+                >
+                  {isSubmittingService ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Menyimpan...</span>
+                    </>
+                  ) : (
+                    <span>{editingService ? 'Simpan Perubahan' : 'Terbitkan Layanan'}</span>
                   )}
                 </button>
               </div>
